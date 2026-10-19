@@ -343,4 +343,98 @@ describe('AntigravityAgent Phase 1 Capabilities', () => {
       expect.objectContaining({ actorLabel: 'Antigravity' })
     );
   });
+
+  it('handles account creation intent "create one new gmail for me"', async () => {
+    mockDevToolsManager.evaluateInTab
+      .mockResolvedValueOnce({ dismissed: false }) // autoDismissOverlays
+      .mockResolvedValueOnce([                      // form fields inspect
+        { type: 'text', label: 'First name' },
+        { type: 'text', label: 'Last name' }
+      ]);
+
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 11,
+      from: 'user',
+      text: 'create one new gmail for me',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockTabManager.openTab).toHaveBeenCalledWith(
+      'https://accounts.google.com/signup',
+      undefined,
+      'ai',
+      'persist:tandem',
+      true
+    );
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Navigated to Gmail / Google Account Sign-Up'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles login intent "log in to github"', async () => {
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 12,
+      from: 'user',
+      text: 'log in to github',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockTabManager.openTab).toHaveBeenCalledWith(
+      'https://github.com/login',
+      undefined,
+      'ai',
+      'persist:tandem',
+      true
+    );
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Navigated to GitHub Login'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles clicking on first search result "click the first result"', async () => {
+    mockDevToolsManager.evaluateInTab
+      .mockResolvedValueOnce({ dismissed: false }) // autoDismissOverlays
+      .mockResolvedValueOnce({ ok: true, text: 'GitHub: Let’s build from here', url: 'https://github.com' });
+
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 13,
+      from: 'user',
+      text: 'click the first result',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Clicked on result #1'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
 });

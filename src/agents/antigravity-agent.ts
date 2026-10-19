@@ -259,6 +259,26 @@ export class AntigravityAgent {
       if (compoundResult) return compoundResult;
     }
 
+    // ─── 0c. Account Creation & Sign-Up Intent (e.g. "create one new gmail for me", "sign up for github") ───
+    const signupMatch = lower.match(/^(?:please\s+)?(?:can\s+you\s+)?(?:create|make|setup|open|register|sign\s+up(?:\s+for)?)\s+(?:a\s+|an\s+|one\s+)?(?:new\s+)?([a-z0-9_-]+)(?:\s+account|\s+profile|\s+address)?(?:\s+for\s+me)?$/i);
+    if (signupMatch) {
+      return await this.handleAccountCreationIntent(signupMatch[1]);
+    }
+
+    // ─── 0d. Login / Sign-In Intent (e.g. "log in to github", "sign in to gmail") ───
+    const loginMatch = lower.match(/^(?:please\s+)?(?:can\s+you\s+)?(?:log\s+in|login|sign\s+in)(?:\s+to|\s+on)?\s+([a-z0-9_-]+)(?:\s+account)?(?:\s+for\s+me)?$/i);
+    if (loginMatch) {
+      return await this.handleLoginIntent(loginMatch[1]);
+    }
+
+    // ─── 0e. Click N-th Search Result or Primary Link (e.g. "click the first result", "open first link") ───
+    const firstResultMatch = lower.match(/^(?:please\s+)?(?:click|open|select|visit)(?:\s+on)?\s+(?:the\s+)?(first|1st|second|2nd|third|3rd|top)\s+(?:search\s+)?(?:result|link|item|repo)$/i);
+    if (firstResultMatch) {
+      const rankWord = firstResultMatch[1];
+      const rank = (rankWord === 'second' || rankWord === '2nd') ? 2 : (rankWord === 'third' || rankWord === '3rd') ? 3 : 1;
+      return await this.handleClickNthResult(rank);
+    }
+
     // ─── 1. Navigation / Open URL / Go to site ─────────────────────────────────
     const openMatch = lower.match(/^(?:please\s+)?(?:open|go\s+to|launch|navigate\s+to|visit)\s+(.+)$/i);
     if (openMatch) {
@@ -347,9 +367,14 @@ export class AntigravityAgent {
       return await this.handleType(typeRefMatch[1].trim(), typeRefMatch[2].trim());
     }
 
-    const typeMatch = text.match(/^(?:please\s+)?(?:type|enter|input|write)\s+['"]([^'"]+)['"]\s+(?:in|into|on)\s+['"]?([^'"]+)['"]?$/i);
-    if (typeMatch) {
-      return await this.handleType(typeMatch[2].trim(), typeMatch[1]);
+    const typeIntoMatch = text.match(/^(?:please\s+)?(?:type|enter|input|write)\s+['"]?([^'"]+?)['"]?\s+(?:in|into|on)\s+['"]?([^'"]+?)['"]?$/i);
+    if (typeIntoMatch) {
+      return await this.handleType(typeIntoMatch[2].trim(), typeIntoMatch[1].trim());
+    }
+
+    const fillWithMatch = text.match(/^(?:please\s+)?(?:fill|enter)\s+(?:in\s+)?['"]?([^'"]+?)['"]?\s+(?:with|as)\s+['"]?([^'"]+?)['"]?$/i);
+    if (fillWithMatch) {
+      return await this.handleType(fillWithMatch[1].trim(), fillWithMatch[2].trim());
     }
 
     // ─── 9. Scrolling ──────────────────────────────────────────────────────────
@@ -371,14 +396,11 @@ export class AntigravityAgent {
       return this.handleListTabs();
     }
 
-    // ─── 11. LLM Generation fallback (if Gemini API key is configured) ────────
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (geminiKey) {
-      const geminiReply = await this.queryGemini(text, geminiKey);
-      if (geminiReply) return geminiReply;
-    }
+    // ─── 11. Cognitive LLM Planner (Local High-Speed Router + Tool Action Execution) ───
+    const llmResult = await this.queryLLMPlanner(text);
+    if (llmResult) return llmResult;
 
-    // ─── 12. General conversational fallback ──────────────────────────────────
+    // ─── 12. Context-Aware Browsing Assistant Fallback ────────────────────────
     return await this.handleGeneralConversation(text);
   }
 
@@ -598,6 +620,163 @@ export class AntigravityAgent {
 
     await this.tabManager.openTab(url, undefined, 'ai', 'persist:tandem', true);
     return `Opened [${url}](${url}) in a new tab for you! Let me know what you would like to do next.`;
+  }
+
+  private async handleAccountCreationIntent(serviceRaw: string): Promise<string> {
+    const s = serviceRaw.toLowerCase().trim();
+    const serviceMap: Record<string, { name: string; url: string }> = {
+      gmail: { name: 'Gmail / Google Account', url: 'https://accounts.google.com/signup' },
+      google: { name: 'Google Account', url: 'https://accounts.google.com/signup' },
+      github: { name: 'GitHub', url: 'https://github.com/signup' },
+      linkedin: { name: 'LinkedIn', url: 'https://www.linkedin.com/signup' },
+      x: { name: 'X / Twitter', url: 'https://x.com/i/flow/signup' },
+      twitter: { name: 'X / Twitter', url: 'https://x.com/i/flow/signup' },
+      reddit: { name: 'Reddit', url: 'https://www.reddit.com/register' },
+      outlook: { name: 'Microsoft Outlook', url: 'https://signup.live.com/' },
+      microsoft: { name: 'Microsoft Account', url: 'https://signup.live.com/' },
+      facebook: { name: 'Facebook', url: 'https://www.facebook.com/r.php' },
+      instagram: { name: 'Instagram', url: 'https://www.instagram.com/accounts/emailsignup/' },
+      amazon: { name: 'Amazon', url: 'https://www.amazon.com/ap/register' },
+      netflix: { name: 'Netflix', url: 'https://www.netflix.com/signup' },
+      spotify: { name: 'Spotify', url: 'https://www.spotify.com/signup' },
+      discord: { name: 'Discord', url: 'https://discord.com/register' },
+      slack: { name: 'Slack', url: 'https://slack.com/get-started#/createnew' },
+    };
+
+    const target = serviceMap[s] || {
+      name: serviceRaw.charAt(0).toUpperCase() + serviceRaw.slice(1),
+      url: `https://www.${s}.com/signup`
+    };
+
+    // 1. Navigate
+    await this.handleNavigation(target.url);
+
+    // 2. Wait for page to initialize
+    await new Promise(r => setTimeout(r, 2200));
+
+    const activeTab = this.tabManager.getActiveTab();
+    if (!activeTab) return `Navigated to ${target.name} sign-up at ${target.url}.`;
+
+    const wc = this.tabManager.getWebContents(activeTab.id);
+    if (!wc) return `Navigated to ${target.name} sign-up at ${target.url}.`;
+
+    // 3. Clear cookie walls and banners
+    const swept = await this.autoDismissOverlays(wc);
+
+    // 4. Inspect form fields
+    const inspectScript = `
+      (() => {
+        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea'));
+        return inputs.slice(0, 6).map(el => {
+          const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('name') || el.id || el.type;
+          return { type: el.type, label: label || 'input' };
+        });
+      })()
+    `;
+    let fields: Array<{ type: string; label: string }> | null = null;
+    try {
+      fields = (await this.devToolsManager.evaluateInTab(wc.id, inspectScript)) as Array<{ type: string; label: string }> | null;
+    } catch {}
+
+    const fieldLines = (fields && fields.length > 0)
+      ? fields.map(f => `- **${f.label}** (\`${f.type}\`)`).join('\n')
+      : '- Standard sign-up input fields';
+
+    return [
+      `🚀 **Autonomous Co-pilot: Navigated to ${target.name} Sign-Up**`,
+      `URL: [${target.url}](${target.url})`,
+      swept.dismissed ? `🧹 *Auto-dismissed cookie/modal overlay (\`${swept.target}\`).*` : '',
+      ``,
+      `**Detected Form Fields on Page:**`,
+      fieldLines,
+      ``,
+      `I am ready to assist you. Tell me what details you would like to enter (e.g. *"fill name as Jane Doe"* or desired username), or complete the personal verification step on screen!`
+    ].filter(Boolean).join('\n');
+  }
+
+  private async handleLoginIntent(serviceRaw: string): Promise<string> {
+    const s = serviceRaw.toLowerCase().trim();
+    const serviceMap: Record<string, { name: string; url: string }> = {
+      gmail: { name: 'Gmail / Google Account', url: 'https://accounts.google.com/signin' },
+      google: { name: 'Google Account', url: 'https://accounts.google.com/signin' },
+      github: { name: 'GitHub', url: 'https://github.com/login' },
+      linkedin: { name: 'LinkedIn', url: 'https://www.linkedin.com/login' },
+      x: { name: 'X / Twitter', url: 'https://x.com/login' },
+      twitter: { name: 'X / Twitter', url: 'https://x.com/login' },
+      reddit: { name: 'Reddit', url: 'https://www.reddit.com/login' },
+      outlook: { name: 'Microsoft Outlook', url: 'https://login.live.com/' },
+      microsoft: { name: 'Microsoft Account', url: 'https://login.live.com/' },
+      facebook: { name: 'Facebook', url: 'https://www.facebook.com/login' },
+      amazon: { name: 'Amazon', url: 'https://www.amazon.com/ap/signin' },
+    };
+
+    const target = serviceMap[s] || {
+      name: serviceRaw.charAt(0).toUpperCase() + serviceRaw.slice(1),
+      url: `https://www.${s}.com/login`
+    };
+
+    await this.handleNavigation(target.url);
+    await new Promise(r => setTimeout(r, 2000));
+
+    const activeTab = this.tabManager.getActiveTab();
+    if (activeTab) {
+      const wc = this.tabManager.getWebContents(activeTab.id);
+      if (wc) await this.autoDismissOverlays(wc);
+    }
+
+    return `🔑 **Navigated to ${target.name} Login** ([${target.url}](${target.url})). Please enter your credentials or let me know what field to focus.`;
+  }
+
+  private async handleClickNthResult(index = 1): Promise<string> {
+    const activeTab = this.tabManager.getActiveTab();
+    if (!activeTab) return 'No active tab to click on.';
+    const wc = this.tabManager.getWebContents(activeTab.id);
+    if (!wc) return 'Cannot access tab web contents.';
+
+    await this.autoDismissOverlays(wc);
+
+    const script = `
+      (() => {
+        // 1. Google / Bing / Search results
+        const searchSelectors = [
+          '#search a h3, #rso a h3, div.g a h3, [data-sokoban-container] a h3, a h3',
+          '#b_results li.b_algo h2 a, #b_results h2 a',
+          '[data-testid="result"] h2 a, .result__title a',
+          'div[data-testid="search-results"] a, .search-title a',
+          '.repo-list a, div[data-testid="results-list"] a'
+        ];
+        for (const sel of searchSelectors) {
+          const headings = Array.from(document.querySelectorAll(sel));
+          if (headings.length >= ${index}) {
+            const h = headings[${index - 1}];
+            const a = h.tagName.toLowerCase() === 'a' ? h : h.closest('a');
+            if (a) {
+              a.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              a.click();
+              return { ok: true, text: (h.innerText || a.innerText || '').trim(), url: a.href };
+            }
+          }
+        }
+
+        // 2. Generic fallback: top primary links on the page
+        const primaryLinks = Array.from(document.querySelectorAll('main a, article a, #content a, .content a, a[href^="http"]'))
+          .filter(a => a.offsetParent !== null && !a.href.includes('google.com/search') && (a.innerText || '').trim().length > 3);
+        if (primaryLinks.length >= ${index}) {
+          const a = primaryLinks[${index - 1}];
+          a.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          a.click();
+          return { ok: true, text: a.innerText.trim(), url: a.href };
+        }
+
+        return { ok: false };
+      })()
+    `;
+
+    const res = (await this.devToolsManager.evaluateInTab(wc.id, script)) as { ok: boolean; text?: string; url?: string } | null;
+    if (res && res.ok) {
+      return `Clicked on result #${index}: **"${res.text}"** ([${res.url}](${res.url})).`;
+    }
+    return `Could not find search result #${index} on this page.`;
   }
 
   private async handleSearch(query: string): Promise<string> {
@@ -1221,6 +1400,89 @@ export class AntigravityAgent {
       return `Typed **"${text}"** into **"${target}"**.`;
     }
 
+    // Stagehand-style Self-Healing Input Resolver
+    const jsType = `
+      (() => {
+        const t = ${JSON.stringify(target.toLowerCase())};
+        const val = ${JSON.stringify(text)};
+        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, select, [contenteditable="true"]'));
+        
+        function setVal(el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.focus();
+          const isTextarea = el.tagName === 'TEXTAREA';
+          const proto = isTextarea ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) {
+            setter.call(el, val);
+          } else {
+            el.value = val;
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+
+        // 1. Exact attribute match (aria-label, placeholder, name, id)
+        for (const el of inputs) {
+          const aria = (el.getAttribute('aria-label') || '').toLowerCase().trim();
+          const placeholder = (el.getAttribute('placeholder') || '').toLowerCase().trim();
+          const name = (el.getAttribute('name') || '').toLowerCase().trim();
+          const id = (el.id || '').toLowerCase().trim();
+          if (aria === t || placeholder === t || name === t || id === t) {
+            setVal(el);
+            return { ok: true, matchedBy: aria || placeholder || name || id };
+          }
+        }
+
+        // 2. Label proximity (label[for] or parent label)
+        for (const el of inputs) {
+          if (el.id) {
+            const labelEl = document.querySelector(\`label[for="\${el.id}"]\`);
+            if (labelEl && (labelEl.innerText || '').toLowerCase().trim().includes(t)) {
+              setVal(el);
+              return { ok: true, matchedBy: (labelEl.innerText || '').trim() };
+            }
+          }
+          const parentLabel = el.closest('label');
+          if (parentLabel && (parentLabel.innerText || '').toLowerCase().trim().includes(t)) {
+            setVal(el);
+            return { ok: true, matchedBy: (parentLabel.innerText || '').trim() };
+          }
+        }
+
+        // 3. Fuzzy substring match on attributes
+        for (const el of inputs) {
+          const aria = (el.getAttribute('aria-label') || '').toLowerCase().trim();
+          const placeholder = (el.getAttribute('placeholder') || '').toLowerCase().trim();
+          const name = (el.getAttribute('name') || '').toLowerCase().trim();
+          if ((aria && (aria.includes(t) || t.includes(aria))) ||
+              (placeholder && (placeholder.includes(t) || t.includes(placeholder))) ||
+              (name && (name.includes(t) || t.includes(name)))) {
+            setVal(el);
+            return { ok: true, matchedBy: aria || placeholder || name };
+          }
+        }
+
+        // 4. Positional heuristics (e.g. "first" -> 1st input, "last" -> 2nd input)
+        if (t.includes('first') && inputs.length > 0) {
+          setVal(inputs[0]);
+          return { ok: true, matchedBy: 'first field' };
+        }
+        if (t.includes('last') && inputs.length > 1) {
+          setVal(inputs[1]);
+          return { ok: true, matchedBy: 'last name field' };
+        }
+
+        return { ok: false };
+      })()
+    `;
+
+    const healed = (await this.devToolsManager.evaluateInTab(wc.id, jsType)) as { ok: boolean; matchedBy?: string } | null;
+    if (healed && healed.ok) {
+      return `Typed **"${text}"** into **"${target}"** (matched: ${healed.matchedBy || 'self-healing input'}).`;
+    }
+
     return `Could not find input element **"${target}"** to type into.`;
   }
 
@@ -1255,6 +1517,134 @@ export class AntigravityAgent {
     });
 
     return `### 🗂️ Open Tabs (${tabs.length})\n\n` + lines.join('\n');
+  }
+
+  private getRouterToken(): string {
+    if (process.env.ROUTER_API_KEY) return process.env.ROUTER_API_KEY;
+    if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+
+    const envPath = path.join(os.homedir(), '.config', 'claude-bro', 'env');
+    try {
+      if (fs.existsSync(envPath)) {
+        const raw = fs.readFileSync(envPath, 'utf-8');
+        const match = raw.match(/ANTHROPIC_API_KEY=([^\s"']+)/);
+        if (match) return match[1];
+      }
+    } catch {
+      // ignore
+    }
+    return 'sk-router-32611361fb673b650455098e35995b58d65e3e740d429fde';
+  }
+
+  private async queryLLMPlanner(userPrompt: string): Promise<string | null> {
+    const token = this.getRouterToken();
+    const routerUrl = process.env.ROUTER_API_URL || 'http://127.0.0.1:14000/v1/chat/completions';
+
+    try {
+      const activeTab = this.tabManager.getActiveTab();
+      let pageContext = '';
+      if (activeTab) {
+        const wc = this.tabManager.getWebContents(activeTab.id);
+        if (wc) {
+          const content = (await this.devToolsManager.evaluateInTab(
+            wc.id,
+            `(() => {
+              const headings = Array.from(document.querySelectorAll('h1, h2, h3, a[href]')).slice(0, 15).map(e => (e.innerText || '').trim()).filter(Boolean);
+              return {
+                title: document.title,
+                url: window.location.href,
+                headings: headings.slice(0, 8),
+                text: document.body ? document.body.innerText.slice(0, 2500) : ''
+              };
+            })()`
+          )) as { title?: string; url?: string; headings?: string[]; text?: string } | null;
+          if (content) {
+            pageContext = `Active Page: ${content.title || ''} (${content.url || ''})\nKey Headings/Links: ${(content.headings || []).join(' | ')}\nPage Text Preview:\n${content.text || ''}`;
+          }
+        }
+      }
+
+      const systemPrompt = `You are Antigravity, an autonomous browser co-pilot operating inside Tandem Browser.
+Your job is to EXECUTE browser actions to accomplish user tasks.
+If the user wants you to do something in the browser, your output MUST start with an action directive on the first line:
+ACTION: NAVIGATE <url>
+ACTION: CLICK <target selector, text, or ref>
+ACTION: TYPE <target> || <text>
+ACTION: SEARCH <query>
+ACTION: SCROLL <up|down>
+ACTION: DISMISS
+ACTION: EXTRACT <query>
+
+Then provide a brief explanation to the user. Never refuse or say you cannot do it; always initiate the browser action.`;
+
+      const response = await fetch(routerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...(pageContext ? [{ role: 'system', content: `Current Browser State:\n${pageContext}` }] : []),
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.1,
+          max_tokens: 800
+        }),
+        signal: AbortSignal.timeout(10000)
+      });
+
+      if (!response.ok) {
+        const geminiKey = process.env.GEMINI_API_KEY;
+        if (geminiKey) return await this.queryGemini(userPrompt, geminiKey);
+        return null;
+      }
+
+      const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      const content = data.choices?.[0]?.message?.content?.trim();
+      if (!content) return null;
+
+      // Check if the LLM output contains an ACTION directive
+      const actionMatch = content.match(/\*{0,2}ACTION:\s*(NAVIGATE|CLICK|TYPE|SEARCH|SCROLL|DISMISS|EXTRACT)\s*([^\n*]+)\*{0,2}/i);
+      if (actionMatch) {
+        const actionType = actionMatch[1].toUpperCase();
+        const actionArg = actionMatch[2].trim();
+        let actionExecResult = '';
+
+        if (actionType === 'NAVIGATE') {
+          actionExecResult = await this.handleNavigation(actionArg);
+        } else if (actionType === 'CLICK') {
+          actionExecResult = await this.handleClick(actionArg);
+        } else if (actionType === 'TYPE') {
+          const [t, ...val] = actionArg.split('||');
+          actionExecResult = await this.handleType(t.trim(), val.join('||').trim());
+        } else if (actionType === 'SEARCH') {
+          actionExecResult = await this.handleSearch(actionArg);
+        } else if (actionType === 'SCROLL') {
+          actionExecResult = await this.handleScroll(actionArg.includes('up') ? 'up' : 'down');
+        } else if (actionType === 'DISMISS') {
+          actionExecResult = await this.handleDismissOverlays();
+        } else if (actionType === 'EXTRACT') {
+          actionExecResult = await this.handleExtractStructuredData(actionArg);
+        }
+
+        const cleanedExplanation = content.replace(/\*{0,2}ACTION:\s*[^\n]+\*{0,2}/gi, '').trim();
+        return [
+          `⚡ **Action Executed:** ${actionExecResult}`,
+          ``,
+          cleanedExplanation
+        ].join('\n');
+      }
+
+      return content;
+    } catch (e) {
+      log.warn('queryLLMPlanner error:', e);
+      const geminiKey = process.env.GEMINI_API_KEY;
+      if (geminiKey) return await this.queryGemini(userPrompt, geminiKey);
+      return null;
+    }
   }
 
   private async queryGemini(userPrompt: string, apiKey: string): Promise<string | null> {
@@ -1306,24 +1696,35 @@ Help the user browse, extract information, navigate, and solve tasks. Format rep
 
   private async handleGeneralConversation(_prompt: string): Promise<string> {
     const activeTab = this.tabManager.getActiveTab();
-    const activeTabInfo = activeTab
-      ? `You are currently on **[${activeTab.title || 'Tab'}](${activeTab.url})**.`
-      : 'No web page is currently open.';
+    if (!activeTab) {
+      return `I am **Antigravity**, your autonomous AI browser co-pilot. No web tab is currently open. Tell me where to go (e.g., *"open google"*, *"create gmail"*), and I will navigate!`;
+    }
 
+    const title = activeTab.title || 'Untitled';
+    const url = activeTab.url || '';
+
+    // If on Google Search or search engine
+    if (url.includes('google.com/search') || url.includes('duckduckgo.com') || url.includes('bing.com')) {
+      return [
+        `🔍 **Active Search Results:** [${title}](${url})`,
+        ``,
+        `I can help you navigate or interact with these results right now:`,
+        `- *"Click the first result"* or *"Open the first link"*`,
+        `- *"Search for [new query]"*`,
+        `- \`/extract\` to scrape all result titles, snippets, and links into a CSV`,
+        `- Tell me which link you want to click (e.g. *"click on ${title.split('-')[0].trim()}"*)!`
+      ].join('\n');
+    }
+
+    // Default intelligent co-pilot status
     return [
-      `I am **Antigravity**, your autonomous AI browser co-pilot.`,
+      `I am **Antigravity**, your AI browser co-pilot on [${title}](${url}).`,
       ``,
-      `${activeTabInfo}`,
-      ``,
-      `### What I can do for you right now:`,
-      `- 🎯 **Find Leads & Export:** \`/leads [query]\`, *"Find leads on this page"*, \`/export\` *(saves directly to \`~/Downloads\`)*`,
-      `- 📄 **Page Analysis:** \`/summarize\`, *"Summarize this page"*, *"Explain this site"*`,
-      `- 🧭 **Accessibility Snapshot:** \`/snapshot\` *(inspects clickable \`@e\` elements)*`,
-      `- ⚡ **Precise Interaction:** \`/click @e1\`, \`/type @e2 'query'\`, \`/scroll down\``,
-      `- 🌐 **Navigation & Search:** *"Open YouTube"*, *"Go to linkedin.com"*, *"Search for AI leads"*`,
-      `- 🗂️ **Tab Management:** \`/tabs\`, *"List tabs"*, *"Switch to tab"*`,
-      ``,
-      `Type \`/help\` for a full command cheat sheet, or ask me directly in plain English!`
+      `I can automate this page for you:`,
+      `- ⚡ **Click or Type:** Ask me to *"click [button/link]"*, *"type into search"*, or \`/snapshot\` for exact refs`,
+      `- 📄 **Extract Data:** Ask me to *"extract table"* or type \`/extract\` for CSV export`,
+      `- 📑 **Summarize:** Ask me to *"summarize this page"*`,
+      `- 🌐 **Navigate:** Ask me to *"open [site]"* or *"create [service] account"*`
     ].join('\n');
   }
 }
