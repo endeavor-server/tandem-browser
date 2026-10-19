@@ -258,4 +258,33 @@ describe('AntigravityAgent Phase 1 Capabilities', () => {
       expect.objectContaining({ actorLabel: 'Antigravity' })
     );
   });
+
+  it('handles multi-step compound autonomous goal "open youtube and search for jazz"', async () => {
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 8,
+      from: 'user',
+      text: 'open youtube and search for jazz',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Step 1/2'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Autonomous Co-pilot'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
 });

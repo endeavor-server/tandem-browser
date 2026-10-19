@@ -247,6 +247,17 @@ export class AntigravityAgent {
 
     const lower = text.toLowerCase();
 
+    // ─── 0b. Compound Autonomous Co-pilot Tasks (e.g. "open X and search Y", "go to X and summarize") ───
+    if (
+      lower.includes(' and ') ||
+      lower.includes(' then ') ||
+      lower.includes(' after that ') ||
+      lower.includes('; ')
+    ) {
+      const compoundResult = await this.executeCompoundPlan(text);
+      if (compoundResult) return compoundResult;
+    }
+
     // ─── 1. Navigation / Open URL / Go to site ─────────────────────────────────
     const openMatch = lower.match(/^(?:please\s+)?(?:open|go\s+to|launch|navigate\s+to|visit)\s+(.+)$/i);
     if (openMatch) {
@@ -451,6 +462,67 @@ export class AntigravityAgent {
       default:
         return `Unknown slash command **${cmd}**. Type \`/help\` to see all available commands.`;
     }
+  }
+
+  /** Decompose and execute compound multi-step co-pilot tasks sequentially */
+  private async executeCompoundPlan(prompt: string): Promise<string | null> {
+    const clauses = prompt
+      .split(/\s+(?:and\s+then|then|after\s+that|and)\s+|;\s*/i)
+      .map(c => c.trim())
+      .filter(Boolean);
+
+    if (clauses.length <= 1) return null;
+
+    const stepReports: string[] = [];
+    stepReports.push(`🚀 **Autonomous Co-pilot Executing (${clauses.length} Steps):**\n`);
+
+    for (let i = 0; i < clauses.length; i++) {
+      const clause = clauses[i];
+      const cl = clause.toLowerCase();
+
+      // Notify panel of step progress
+      this.panelManager.addChatMessage(
+        'antigravity',
+        `⏳ **Step ${i + 1}/${clauses.length}:** ${clause}...`,
+        undefined,
+        { actorLabel: 'Antigravity', agentType: 'antigravity-agent', targetAgent: 'antigravity' }
+      );
+
+      // Execute atomic intent
+      let result = '';
+      if (/^(?:please\s+)?(?:open|go\s+to|navigate\s+to|visit)\s+(.+)$/i.test(cl)) {
+        const target = cl.replace(/^(?:please\s+)?(?:open|go\s+to|navigate\s+to|visit)\s+/i, '').trim();
+        result = await this.handleNavigation(target);
+        await new Promise(r => setTimeout(r, 1800));
+      } else if (/^(?:search(?:\s+for)?|google|lookup)\s+(.+)$/i.test(cl)) {
+        const query = cl.replace(/^(?:search(?:\s+for)?|google|lookup)\s+/i, '').trim();
+        result = await this.handleSearch(query);
+        await new Promise(r => setTimeout(r, 1800));
+      } else if (cl.includes('summarize') || cl === 'tldr') {
+        result = await this.handleSummarizePage();
+      } else if (cl.includes('lead') || cl.includes('contact')) {
+        result = await this.handleLeadExtraction();
+      } else if (cl.includes('enrich')) {
+        result = await this.handleEnrichLeads();
+      } else if (cl.includes('export')) {
+        result = this.exportLeadsToCsv();
+      } else if (/^(?:please\s+)?(?:click|press|tap)/i.test(cl)) {
+        const target = cl.replace(/^(?:please\s+)?(?:click|press|tap)(?:\s+on)?\s+/i, '').replace(/['"]/g, '').trim();
+        result = await this.handleClick(target);
+        await new Promise(r => setTimeout(r, 1500));
+      } else if (cl.includes('scroll')) {
+        const dir = cl.includes('up') ? 'up' : 'down';
+        result = await this.handleScroll(dir);
+      } else {
+        result = await this.executeUserIntent(clause);
+      }
+
+      stepReports.push(`✅ **Step ${i + 1}:** ${clause}\n${result}\n`);
+    }
+
+    const activeTab = this.tabManager.getActiveTab();
+    stepReports.push(`🎉 **Autonomous Co-pilot Finished!** Active on [${activeTab?.title || 'Page'}](${activeTab?.url}).`);
+    return stepReports.join('\n');
   }
 
   // ─── Intent Handlers ────────────────────────────────────────────────────────
