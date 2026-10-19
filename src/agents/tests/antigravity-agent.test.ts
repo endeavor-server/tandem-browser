@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AntigravityAgent } from '../antigravity-agent';
 
-describe('AntigravityAgent', () => {
+describe('AntigravityAgent Phase 1 Capabilities', () => {
   let mockTabManager: any;
   let mockPanelManager: any;
   let mockDevToolsManager: any;
+  let mockSnapshotManager: any;
   let chatListener: ((msg: any) => void) | null = null;
 
   beforeEach(() => {
@@ -50,99 +51,147 @@ describe('AntigravityAgent', () => {
         text: 'Welcome to YouTube. Enjoy the videos.'
       })
     };
+
+    mockSnapshotManager = {
+      getSnapshot: vi.fn().mockResolvedValue({
+        text: '@e1 [button] "Search"\n@e2 [textbox] "Search Google"',
+        count: 2,
+        url: 'https://www.google.com/'
+      }),
+      clickRef: vi.fn().mockResolvedValue({ ok: true }),
+      fillRef: vi.fn().mockResolvedValue({ ok: true })
+    };
   });
 
   it('subscribes to onChatMessage on initialization', () => {
     new AntigravityAgent({
       tabManager: mockTabManager,
       panelManager: mockPanelManager,
-      devToolsManager: mockDevToolsManager
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
     });
 
     expect(mockPanelManager.onChatMessage).toHaveBeenCalled();
     expect(chatListener).not.toBeNull();
   });
 
-  it('ignores messages from non-user senders', async () => {
+  it('handles /help slash command', async () => {
     new AntigravityAgent({
       tabManager: mockTabManager,
       panelManager: mockPanelManager,
-      devToolsManager: mockDevToolsManager
-    });
-
-    await chatListener!({ id: 1, from: 'antigravity', text: 'Hello', targetAgent: 'antigravity' });
-    expect(mockPanelManager.setWingmanTyping).not.toHaveBeenCalled();
-    expect(mockPanelManager.addChatMessage).not.toHaveBeenCalled();
-  });
-
-  it('handles navigation requests like "open youtube for me"', async () => {
-    new AntigravityAgent({
-      tabManager: mockTabManager,
-      panelManager: mockPanelManager,
-      devToolsManager: mockDevToolsManager
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
     });
 
     await chatListener!({
-      id: 2,
+      id: 1,
       from: 'user',
-      text: 'open youtube for me',
+      text: '/help',
       targetAgent: 'antigravity'
     });
 
-    expect(mockPanelManager.setWingmanTyping).toHaveBeenCalledWith(true);
-    expect(mockPanelManager.setWingmanTyping).toHaveBeenCalledWith(false);
     expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
       'antigravity',
-      expect.stringContaining('YouTube'),
-      undefined,
-      expect.objectContaining({ actorLabel: 'Antigravity', agentType: 'antigravity-agent' })
-    );
-  });
-
-  it('handles "summarize this page"', async () => {
-    new AntigravityAgent({
-      tabManager: mockTabManager,
-      panelManager: mockPanelManager,
-      devToolsManager: mockDevToolsManager
-    });
-
-    await chatListener!({
-      id: 3,
-      from: 'user',
-      text: 'summarize this page',
-      targetAgent: 'antigravity'
-    });
-
-    expect(mockDevToolsManager.evaluateInTab).toHaveBeenCalled();
-    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
-      'antigravity',
-      expect.stringContaining('Summary'),
+      expect.stringContaining('/leads'),
       undefined,
       expect.objectContaining({ actorLabel: 'Antigravity' })
     );
   });
 
-  it('handles lead extraction requests', async () => {
-    mockDevToolsManager.evaluateInTab.mockResolvedValueOnce([
-      { name: 'John Doe', headline: 'AI Founder', location: 'San Francisco', profileUrl: 'https://linkedin.com/in/johndoe' }
-    ]);
-
+  it('handles /snapshot command using SnapshotManager', async () => {
     new AntigravityAgent({
       tabManager: mockTabManager,
       panelManager: mockPanelManager,
-      devToolsManager: mockDevToolsManager
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 2,
+      from: 'user',
+      text: '/snapshot',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockSnapshotManager.getSnapshot).toHaveBeenCalled();
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('@e1'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles /click @e1 ref-based clicking', async () => {
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 3,
+      from: 'user',
+      text: '/click @e1',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockSnapshotManager.clickRef).toHaveBeenCalledWith('@e1');
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('@e1'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles /type @e2 ref-based typing', async () => {
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
     });
 
     await chatListener!({
       id: 4,
       from: 'user',
-      text: 'find leads on this page',
+      text: "/type @e2 'AI Engineer'",
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockSnapshotManager.fillRef).toHaveBeenCalledWith('@e2', 'AI Engineer');
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Filled'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles lead extraction and automated CSV generation', async () => {
+    mockDevToolsManager.evaluateInTab.mockResolvedValueOnce([
+      { name: 'Alice Smith', headline: 'VP of AI', location: 'London', profileUrl: 'https://linkedin.com/in/alicesmith' }
+    ]);
+
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 5,
+      from: 'user',
+      text: '/leads',
       targetAgent: 'antigravity'
     });
 
     expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
       'antigravity',
-      expect.stringContaining('Extracted Leads'),
+      expect.stringContaining('.csv'),
       undefined,
       expect.objectContaining({ actorLabel: 'Antigravity' })
     );

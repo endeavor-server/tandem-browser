@@ -259,13 +259,14 @@ export async function initializeRuntimeManagers(opts: InitializeRuntimeOptions):
   runtime.taskHandoffCoordinator = new TaskHandoffCoordinator(runtime.taskManager, runtime.handoffManager);
   runtime.tabLockManager = new TabLockManager();
   runtime.devToolsManager = new DevToolsManager(runtime.tabManager);
+  runtime.snapshotManager = new SnapshotManager(runtime.devToolsManager);
   runtime.antigravityAgent = new AntigravityAgent({
     tabManager: runtime.tabManager,
     panelManager: runtime.panelManager,
     devToolsManager: runtime.devToolsManager,
+    snapshotManager: runtime.snapshotManager,
     configManager: runtime.configManager,
   });
-  runtime.snapshotManager = new SnapshotManager(runtime.devToolsManager);
   runtime.networkMocker = new NetworkMocker(runtime.devToolsManager);
   runtime.sessionManager = new SessionManager();
   runtime.stateManager = new StateManager();
