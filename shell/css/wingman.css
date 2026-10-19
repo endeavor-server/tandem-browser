@@ -811,6 +811,15 @@
       border-left: 3px solid #7c3aed;
     }
 
+    .chat-msg.source-antigravity,
+    .chat-msg.source-antigravity-agent {
+      border-left: 3px solid #3b82f6;
+    }
+
+    .chat-msg.source-opencode {
+      border-left: 3px solid #10b981;
+    }
+
     .chat-msg.source-robin {
       border-left: 3px solid #10b981;
     }
@@ -818,6 +827,20 @@
     .chat-msg.claude {
       background: rgba(124, 58, 237, 0.15);
       border: 1px solid rgba(124, 58, 237, 0.2);
+      align-self: flex-start;
+      color: var(--text);
+    }
+
+    .chat-msg.antigravity {
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      align-self: flex-start;
+      color: var(--text);
+    }
+
+    .chat-msg.opencode {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.2);
       align-self: flex-start;
       color: var(--text);
     }

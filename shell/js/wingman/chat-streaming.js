@@ -46,10 +46,13 @@ export function createStreamingRenderer({ messagesEl }) {
 
   function labelForSource(sourceClass, actorLabel) {
     if (actorLabel && typeof actorLabel === 'string') return actorLabel;
-    if (sourceClass === 'claude') return 'Claude';
-    if (sourceClass === 'codex') return 'Codex';
-    if (sourceClass === 'openclaw') return 'OpenClaw';
-    if (sourceClass === 'tandem') return 'Tandem';
+    const lower = String(sourceClass || '').toLowerCase();
+    if (lower.includes('antigravity')) return 'Antigravity';
+    if (lower.includes('claude')) return 'Claude';
+    if (lower.includes('opencode')) return 'OpenCode';
+    if (lower.includes('codex')) return 'Codex';
+    if (lower.includes('openclaw')) return 'OpenClaw';
+    if (lower.includes('tandem')) return 'Tandem';
     return 'Wingman';
   }
 
@@ -59,12 +62,19 @@ export function createStreamingRenderer({ messagesEl }) {
 
   function appendMessage(role, text, timestamp, source, image, actorLabel) {
     const sourceClass = source || 'openclaw';
+    const lower = String(sourceClass).toLowerCase();
     let cls, name;
     if (role === 'user') {
       cls = 'user';
       name = 'You';
-    } else if (sourceClass === 'claude') {
+    } else if (lower.includes('claude')) {
       cls = 'claude';
+      name = labelForSource(sourceClass, actorLabel);
+    } else if (lower.includes('antigravity')) {
+      cls = 'antigravity';
+      name = labelForSource(sourceClass, actorLabel);
+    } else if (lower.includes('opencode')) {
+      cls = 'opencode';
       name = labelForSource(sourceClass, actorLabel);
     } else {
       cls = 'wingman';
@@ -195,6 +205,13 @@ export function createStreamingRenderer({ messagesEl }) {
       }
       // Only append a new element if this is NOT a final event (final reuses the streaming element)
       if (!msg._final) {
+        if (msg.role === 'user') {
+          const lastChild = messagesEl.lastElementChild;
+          if (lastChild && lastChild.classList.contains('user') &&
+            lastChild.querySelector('.msg-text')?.textContent === msg.text) {
+            return;
+          }
+        }
         appendMessage(msg.role, msg.text, msg.timestamp, msg.source, msg.image, msg.actorLabel);
         if (backendId === 'openclaw' && msg.text) {
           void persistChatMessage('wingman', msg.text, msg.image);
@@ -294,6 +311,13 @@ export function createStreamingRenderer({ messagesEl }) {
         void persistChatMessage('wingman', msg.text);
       }
       if (!msg._final) {
+        if (msg.role === 'user') {
+          const lastChild = messagesEl.lastElementChild;
+          if (lastChild && lastChild.classList.contains('user') &&
+            lastChild.querySelector('.msg-text')?.textContent === msg.text) {
+            return;
+          }
+        }
         appendMessage(msg.role, msg.text, msg.timestamp, msg.source, msg.image, msg.actorLabel);
         if (backendId === 'openclaw' && msg.text) {
           void persistChatMessage('wingman', msg.text, msg.image);

@@ -26,6 +26,7 @@ export interface ChatMessage {
   image?: string;  // relative filename in ~/.tandem/chat-images/
   actorLabel?: string;
   agentType?: string;
+  targetAgent?: string;
   clear?: boolean;
 }
 
@@ -34,6 +35,7 @@ export interface AddChatMessageOptions {
   emitIpc?: boolean;
   actorLabel?: string;
   agentType?: string;
+  targetAgent?: string;
 }
 
 // ─── Manager ────────────────────────────────────────────────────────
@@ -132,6 +134,7 @@ export class PanelManager {
       image,
       actorLabel: opts.actorLabel,
       agentType: opts.agentType,
+      targetAgent: opts.targetAgent,
     };
     this.chatMessages.push(msg);
     this.saveChatHistory();
@@ -153,14 +156,32 @@ export class PanelManager {
     return msg;
   }
 
-  /** Get chat history */
-  getChatMessages(limit: number = 50): ChatMessage[] {
-    return this.chatMessages.slice(-limit);
+  /** Get chat history, optionally filtered by targetAgent */
+  getChatMessages(limit: number = 50, targetAgent?: string): ChatMessage[] {
+    let msgs = this.chatMessages;
+    if (targetAgent) {
+      const target = targetAgent.toLowerCase();
+      msgs = msgs.filter(m => {
+        if (!m.targetAgent || m.targetAgent === 'all' || m.targetAgent === 'both') return true;
+        const msgTarget = m.targetAgent.toLowerCase();
+        return msgTarget === target || msgTarget.includes(target) || target.includes(msgTarget);
+      });
+    }
+    return msgs.slice(-limit);
   }
 
-  /** Get messages since a given ID (for polling) */
-  getChatMessagesSince(sinceId: number): ChatMessage[] {
-    return this.chatMessages.filter(m => m.id > sinceId);
+  /** Get messages since a given ID (for polling), optionally filtered by targetAgent */
+  getChatMessagesSince(sinceId: number, targetAgent?: string): ChatMessage[] {
+    let msgs = this.chatMessages.filter(m => m.id > sinceId);
+    if (targetAgent) {
+      const target = targetAgent.toLowerCase();
+      msgs = msgs.filter(m => {
+        if (!m.targetAgent || m.targetAgent === 'all' || m.targetAgent === 'both') return true;
+        const msgTarget = m.targetAgent.toLowerCase();
+        return msgTarget === target || msgTarget.includes(target) || target.includes(msgTarget);
+      });
+    }
+    return msgs;
   }
 
   /** Clear local chat history and notify the renderer to reload an empty view. */
@@ -304,10 +325,13 @@ export class PanelManager {
   }
 
   private getReplySenderLabel(from: ChatMessage['from']): string {
-    if (from === 'claude') return 'Claude';
-    if (from === 'codex') return 'Codex';
-    if (from === 'openclaw') return 'OpenClaw';
-    if (from && from !== 'wingman') return from;
+    const f = (from || '').toLowerCase();
+    if (f === 'claude' || f === 'claude-code') return 'Claude';
+    if (f === 'antigravity' || f === 'antigravity-agent') return 'Antigravity';
+    if (f === 'opencode' || f === 'open-code') return 'OpenCode';
+    if (f === 'codex') return 'Codex';
+    if (f === 'openclaw') return 'OpenClaw';
+    if (from && from !== 'wingman') return from.charAt(0).toUpperCase() + from.slice(1);
     return 'Wingman';
   }
 

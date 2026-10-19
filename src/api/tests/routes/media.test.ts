@@ -106,6 +106,15 @@ describe('Media Routes', () => {
       expect(ctx.panelManager.getChatMessages).toHaveBeenCalledWith(10);
     });
 
+    it('supports ?agent= query parameter for filtering', async () => {
+      vi.mocked(ctx.panelManager.getChatMessages).mockReturnValue([]);
+
+      const res = await request(app).get('/chat?agent=antigravity');
+
+      expect(res.status).toBe(200);
+      expect(ctx.panelManager.getChatMessages).toHaveBeenCalledWith(50, 'antigravity');
+    });
+
     it('supports /chat/messages as the local chat bus alias', async () => {
       const fakeMessages = [{ id: 1, from: 'user', text: 'local', ts: 1000 }];
       vi.mocked(ctx.panelManager.getChatMessages).mockReturnValue(fakeMessages as any);
@@ -186,6 +195,40 @@ describe('Media Routes', () => {
       expect(ctx.panelManager.addChatMessage).toHaveBeenCalledWith('claude', 'hi', undefined, {
         actorLabel: 'Claude',
         agentType: undefined,
+      });
+    });
+
+    it('maps from=antigravity to sender antigravity', async () => {
+      await request(app)
+        .post('/chat')
+        .send({ text: 'hi', from: 'antigravity' });
+
+      expect(ctx.panelManager.addChatMessage).toHaveBeenCalledWith('antigravity', 'hi', undefined, {
+        actorLabel: 'Antigravity',
+        agentType: undefined,
+      });
+    });
+
+    it('maps from=opencode to sender opencode', async () => {
+      await request(app)
+        .post('/chat')
+        .send({ text: 'hi', from: 'opencode' });
+
+      expect(ctx.panelManager.addChatMessage).toHaveBeenCalledWith('opencode', 'hi', undefined, {
+        actorLabel: 'OpenCode',
+        agentType: undefined,
+      });
+    });
+
+    it('passes targetAgent in chat message options', async () => {
+      await request(app)
+        .post('/chat/messages')
+        .send({ text: 'hi to antigravity', from: 'user', targetAgent: 'antigravity' });
+
+      expect(ctx.panelManager.addChatMessage).toHaveBeenCalledWith('user', 'hi to antigravity', undefined, {
+        actorLabel: undefined,
+        agentType: undefined,
+        targetAgent: 'antigravity',
       });
     });
 

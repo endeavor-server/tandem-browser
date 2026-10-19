@@ -44,27 +44,32 @@ class DualMode {
 
   /**
    * Parse @-mention from message text.
-   * Returns { target: 'claude' | 'openclaw' | 'both', cleanText: string }
+   * Returns { target: string, cleanText: string }
+   * e.g. @antigravity, @claude, @opencode, @wingman, @all
    */
   static parseMention(text) {
     const trimmed = text.trim();
-    const lc = trimmed.toLowerCase();
-
-    if (lc.startsWith('@claude ') || lc === '@claude') {
-      return { target: 'claude', cleanText: trimmed.slice(7).trim() };
+    const match = trimmed.match(/^@([a-zA-Z0-9_-]+)(?:\s+(.*))?$/s);
+    if (match) {
+      const targetName = match[1].toLowerCase();
+      const cleanText = (match[2] || '').trim();
+      if (targetName === 'both' || targetName === 'all') {
+        return { target: 'all', cleanText };
+      }
+      if (targetName === 'wingman' || targetName === 'openclaw') {
+        return { target: 'openclaw', cleanText };
+      }
+      return { target: targetName, cleanText };
     }
-    if (lc.startsWith('@wingman ') || lc === '@wingman') {
-      return { target: 'openclaw', cleanText: trimmed.slice(5).trim() };
-    }
 
-    return { target: 'both', cleanText: trimmed };
+    return { target: 'all', cleanText: trimmed };
   }
 
   /**
    * Send a message with @-mention routing.
-   * - @claude → only claude backend
-   * - @wingman → only openclaw backend
-   * - no mention → both backends
+   * - @openclaw / @wingman → only openclaw backend
+   * - @<agent> (e.g. @antigravity, @claude, @opencode) → routed to that specific agent
+   * - no mention or @all → broadcast to all connected backends/agents
    */
   async sendMessage(text) {
     if (!text) return;
@@ -72,27 +77,39 @@ class DualMode {
     const { target, cleanText } = DualMode.parseMention(text);
     if (!cleanText) return;
 
-    if (target === 'claude') {
-      const backend = this._router.getBackend('claude');
-      if (backend && backend.isConnected()) {
-        await backend.sendMessage(cleanText);
-      }
-    } else if (target === 'openclaw') {
+    if (target === 'openclaw') {
       const backend = this._router.getBackend('openclaw');
       if (backend && backend.isConnected()) {
         await backend.sendMessage(cleanText);
       }
-    } else {
-      // Send to both — fire and forget, don't let one failure block the other
-      const promises = [];
-      for (const backend of this._router.getAllBackends()) {
-        if (backend.isConnected()) {
-          promises.push(
-            backend.sendMessage(cleanText).catch((e) => {
-              console.warn(`[DualMode] Failed to send to ${backend.id}:`, e.message);
-            })
-          );
+    } else if (target && target !== 'all') {
+      const tandemBackend = this._router.getBackend('tandem');
+      if (tandemBackend && tandemBackend.isConnected()) {
+        await tandemBackend.sendMessage(cleanText, { targetAgent: target });
+      } else {
+        const backend = this._router.getBackend(target);
+        if (backend && backend.isConnected()) {
+          await backend.sendMessage(cleanText);
         }
+      }
+    } else {
+      // Send to all connected backends/agents
+      const promises = [];
+      const openclaw = this._router.getBackend('openclaw');
+      if (openclaw && openclaw.isConnected()) {
+        promises.push(
+          openclaw.sendMessage(cleanText).catch((e) => {
+            console.warn('[DualMode] Failed to send to openclaw:', e.message);
+          })
+        );
+      }
+      const tandem = this._router.getBackend('tandem');
+      if (tandem && tandem.isConnected()) {
+        promises.push(
+          tandem.sendMessage(cleanText, { targetAgent: 'all' }).catch((e) => {
+            console.warn('[DualMode] Failed to send to tandem:', e.message);
+          })
+        );
       }
       await Promise.all(promises);
     }
@@ -102,5 +119,5 @@ class DualMode {
   onTyping(cb) { this._typingCallbacks.push(cb); }
 }
 
-// Classic-script global export � consumed by shell/js/wingman/chat.js (ES module) via window.
+// Classic-script global export — consumed by shell/js/wingman/chat.js (ES module) via window.
 window.DualMode = DualMode;

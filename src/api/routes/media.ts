@@ -23,10 +23,13 @@ function deriveActorLabel(sender: string, explicitLabel: unknown): string | unde
     return explicitLabel.trim().slice(0, 80);
   }
   if (sender === 'user') return undefined;
-  if (sender === 'codex') return 'Codex';
-  if (sender === 'claude') return 'Claude';
-  if (sender === 'openclaw') return 'OpenClaw';
-  if (sender === 'wingman') return undefined;
+  const s = sender.toLowerCase();
+  if (s === 'codex') return 'Codex';
+  if (s === 'claude' || s === 'claude-code') return 'Claude';
+  if (s === 'antigravity' || s === 'antigravity-agent') return 'Antigravity';
+  if (s === 'opencode' || s === 'open-code') return 'OpenCode';
+  if (s === 'openclaw') return 'OpenClaw';
+  if (s === 'wingman') return undefined;
   return sender
     .split(/[-_]/)
     .filter(Boolean)
@@ -142,15 +145,23 @@ export function registerMediaRoutes(router: Router, ctx: RouteContext): void {
   // ═══════════════════════════════════════════════
 
   /** Get chat messages (supports ?since_id= for polling) */
+  /** Get chat messages (supports ?since_id= for polling, ?agent= or ?target_agent= for filtering) */
   const getChatMessages = (req: Request, res: Response) => {
     try {
+      const targetAgent = typeof req.query.agent === 'string'
+        ? req.query.agent
+        : (typeof req.query.target_agent === 'string' ? req.query.target_agent : undefined);
       const sinceId = parseSinceId(req.query.since_id);
       if (sinceId) {
-        const messages = ctx.panelManager.getChatMessagesSince(sinceId);
+        const messages = targetAgent
+          ? ctx.panelManager.getChatMessagesSince(sinceId, targetAgent)
+          : ctx.panelManager.getChatMessagesSince(sinceId);
         res.json({ messages });
       } else {
         const limit = parseChatLimit(req.query.limit);
-        const messages = ctx.panelManager.getChatMessages(limit);
+        const messages = targetAgent
+          ? ctx.panelManager.getChatMessages(limit, targetAgent)
+          : ctx.panelManager.getChatMessages(limit);
         res.json({ messages });
       }
     } catch (e) {
@@ -160,9 +171,9 @@ export function registerMediaRoutes(router: Router, ctx: RouteContext): void {
   router.get('/chat', getChatMessages);
   router.get('/chat/messages', getChatMessages);
 
-  /** Send chat message (default: wingman, 'from' param allows robin/claude) */
+  /** Send chat message (default: wingman, 'from' param allows robin/claude, 'targetAgent' allows targeting specific agent) */
   const postChatMessage = (req: Request, res: Response) => {
-    const { text, from, image, actorLabel, agentType } = req.body;
+    const { text, from, image, actorLabel, agentType, targetAgent } = req.body;
     if (!text && !image) { res.status(400).json({ error: 'text or image required' }); return; }
     const primaryAgent = getPrimaryChatAgent(ctx);
     const sender = normalizeChatSender(from ?? primaryAgent?.type);
@@ -175,6 +186,7 @@ export function registerMediaRoutes(router: Router, ctx: RouteContext): void {
       const msg = ctx.panelManager.addChatMessage(sender, text || '', savedImage, {
         actorLabel: resolvedActorLabel,
         agentType: typeof agentType === 'string' ? agentType : primaryAgent?.type,
+        targetAgent: typeof targetAgent === 'string' ? targetAgent : undefined,
       });
       res.json({ ok: true, message: msg });
     } catch (e) {
@@ -198,13 +210,16 @@ export function registerMediaRoutes(router: Router, ctx: RouteContext): void {
 
   /** Wait briefly for new chat messages without forcing MCP clients to poll tightly. */
   router.get('/chat/wait', async (req: Request, res: Response) => {
+    const targetAgent = typeof req.query.agent === 'string'
+      ? req.query.agent
+      : (typeof req.query.target_agent === 'string' ? req.query.target_agent : undefined);
     const sinceId = parseSinceId(req.query.since_id) ?? 0;
     const timeoutMs = Math.min(parseInt(String(req.query.timeout_ms ?? '30000'), 10) || 30_000, 30_000);
     const startedAt = Date.now();
 
     try {
       while (Date.now() - startedAt < timeoutMs) {
-        const messages = ctx.panelManager.getChatMessagesSince(sinceId);
+        const messages = ctx.panelManager.getChatMessagesSince(sinceId, targetAgent);
         if (messages.length > 0) {
           res.json({ messages, timedOut: false });
           return;

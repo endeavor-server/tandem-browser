@@ -30,7 +30,7 @@ export interface TandemConfig {
     wingmanPanelPosition: 'left' | 'right';
     wingmanPanelDefaultOpen: boolean;
     showBookmarksBar: boolean;
-    activeBackend: 'tandem' | 'openclaw' | 'claude' | 'both';
+    activeBackend: 'tandem' | 'openclaw' | 'claude' | 'both' | 'antigravity' | 'opencode' | (string & {});
     agentName: string;
     agentDisplayName: string;
     quickLinks: QuickLinkConfig[];

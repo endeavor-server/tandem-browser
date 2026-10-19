@@ -18,10 +18,13 @@ class TandemLocalBackend {
     this._apiBase = window.tandemApi?.baseUrl() || window.__TANDEM_API_BASE__ || 'http://127.0.0.1:8765';
     this._primaryAgent = null;
     this._connectedAgents = [];
+    this._targetAgent = null;
+    this._statusPollCounter = 0;
 
     this._messageCallbacks = [];
     this._typingCallbacks = [];
     this._connectionCallbacks = [];
+    this._agentsCallbacks = [];
   }
 
   async connect() {
@@ -33,6 +36,7 @@ class TandemLocalBackend {
       }
       const status = await res.json();
       this._applyStatus(status);
+      for (const cb of this._agentsCallbacks) cb(this._connectedAgents);
       this._setConnected(true);
       await this._loadHistory();
       this._startPolling();
@@ -51,13 +55,30 @@ class TandemLocalBackend {
     return this._connected;
   }
 
-  async sendMessage(text) {
+  setTargetAgent(agent) {
+    this._targetAgent = agent || null;
+  }
+
+  getTargetAgent() {
+    return this._targetAgent;
+  }
+
+  onAgentsChanged(cb) {
+    this._agentsCallbacks.push(cb);
+  }
+
+  async sendMessage(text, options = {}) {
     if (!text) return false;
     try {
+      const targetAgent = options.targetAgent !== undefined ? options.targetAgent : this._targetAgent;
+      const body = { text, from: 'user' };
+      if (targetAgent && targetAgent !== 'tandem') {
+        body.targetAgent = targetAgent;
+      }
       const res = await fetch(`${this._apiBase}/chat/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, from: 'user' })
+        body: JSON.stringify(body)
       });
       if (!res.ok) return false;
       const data = await res.json();
@@ -105,6 +126,19 @@ class TandemLocalBackend {
 
   async _poll() {
     try {
+      this._statusPollCounter = (this._statusPollCounter || 0) + 1;
+      if (this._statusPollCounter % 5 === 0) {
+        fetch(`${this._apiBase}/chat/status`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((status) => {
+            if (status) {
+              this._applyStatus(status);
+              for (const cb of this._agentsCallbacks) cb(this._connectedAgents);
+            }
+          })
+          .catch(() => {});
+      }
+
       const res = await fetch(`${this._apiBase}/chat/messages?since_id=${this._lastSeenId}`);
       if (!res.ok) {
         this._setConnected(false);
@@ -152,16 +186,43 @@ class TandemLocalBackend {
 
   _toUiMessage(msg) {
     const from = msg?.from || 'wingman';
-    const fallbackLabel = from === 'wingman' ? this._primaryAgent?.label : undefined;
-    const source = from === 'user' ? 'user' : (from === 'wingman' && this._primaryAgent?.type ? this._primaryAgent.type : from);
+    let source;
+    let actorLabel = msg?.actorLabel;
+
+    if (from === 'user') {
+      source = 'user';
+    } else {
+      const checkStr = `${from} ${actorLabel || ''}`.toLowerCase();
+      if (checkStr.includes('antigravity')) {
+        source = 'antigravity';
+        actorLabel = actorLabel || 'Antigravity';
+      } else if (checkStr.includes('claude')) {
+        source = 'claude';
+        actorLabel = actorLabel || 'Claude';
+      } else if (checkStr.includes('opencode')) {
+        source = 'opencode';
+        actorLabel = actorLabel || 'OpenCode';
+      } else if (checkStr.includes('codex')) {
+        source = 'codex';
+        actorLabel = actorLabel || 'Codex';
+      } else if (from === 'wingman' && this._primaryAgent) {
+        source = this._primaryAgent.type || 'wingman';
+        actorLabel = actorLabel || this._primaryAgent.label;
+      } else {
+        source = from;
+        actorLabel = actorLabel || (from === 'wingman' ? this._primaryAgent?.label : from);
+      }
+    }
+
     return {
       id: msg?.id?.toString?.() || crypto.randomUUID(),
       role: from === 'user' ? 'user' : 'assistant',
       text: msg?.text || '',
       source,
-      actorLabel: msg?.actorLabel || fallbackLabel,
+      actorLabel,
       timestamp: msg?.timestamp || Date.now(),
-      image: msg?.image
+      image: msg?.image,
+      targetAgent: msg?.targetAgent
     };
   }
 
@@ -206,5 +267,5 @@ class TandemLocalBackend {
   }
 }
 
-// Classic-script global export — consumed by shell/js/wingman/chat.js (ES module) via window.
+// Classic-script global export â€” consumed by shell/js/wingman/chat.js (ES module) via window.
 window.TandemLocalBackend = TandemLocalBackend;

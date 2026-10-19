@@ -43,23 +43,7 @@ export function initChat() {
     return { ensureConnected() { }, disconnect() { } };
   }
 
-  if (backendSelector && backendSelector.children.length === 0) {
-    backendSelector.innerHTML = `
-      <button class="backend-option" id="btn-backend-tandem" title="Use Tandem's built-in MCP/API chat">
-        <span class="backend-dot" id="dot-tandem"></span><span>Tandem</span>
-      </button>
-      <button class="backend-option" id="btn-backend-openclaw" title="Use the local OpenClaw gateway">
-        <span class="backend-dot" id="dot-openclaw"></span><span>OpenClaw</span>
-      </button>
-      <button class="backend-option" id="btn-backend-claude" title="Use MCP activity polling">
-        <span class="backend-dot" id="dot-claude"></span><span>Claude</span>
-      </button>
-      <button class="backend-option" id="btn-backend-both" title="Send to every connected backend">
-        <span class="backend-dot" id="dot-both"></span><span>All</span>
-      </button>
-    `;
-    backendSelector.style.display = 'none';
-  }
+
 
   const renderer = createStreamingRenderer({ messagesEl });
   const {
@@ -97,107 +81,182 @@ export function initChat() {
   const dualMode = new window.DualMode(router);
   let currentMode = 'tandem'; // 'tandem' | 'openclaw' | 'claude' | 'both'
 
-  // ── Backend selector UI ──
+  // ── Backend selector UI (Dynamic agent discovery) ──
 
-  const btnTD = document.getElementById('btn-backend-tandem');
-  const btnOC = document.getElementById('btn-backend-openclaw');
-  const btnCL = document.getElementById('btn-backend-claude');
-  const btnBoth = document.getElementById('btn-backend-both');
-  const dotTD = document.getElementById('dot-tandem');
-  const dotOC = document.getElementById('dot-openclaw');
-  const dotCL = document.getElementById('dot-claude');
-  const dotBoth = document.getElementById('dot-both');
-
-  function setBackendOptionVisible(button, visible) {
-    if (!button) return;
-    button.style.display = visible ? 'flex' : 'none';
+  function isChannelConnected(id) {
+    if (id === 'openclaw') return openclawBackend.isConnected();
+    if (id === 'both') {
+      return tandemBackend.isConnected() || openclawBackend.isConnected();
+    }
+    return tandemBackend.isConnected();
   }
 
-  function hasConfiguredAgent(...types) {
+  function getAvailableChannels() {
     const agents = tandemBackend.getConnectedAgents?.() || [];
-    return agents.some((agent) => types.includes(agent.type));
-  }
-
-  function updateVisibleChannels() {
     const primary = tandemBackend.getPrimaryAgent?.();
-    const showTandem = Boolean(primary);
-    const showOpenClaw = hasConfiguredAgent('openclaw');
-    const showClaude = hasConfiguredAgent('claude', 'claude-code');
-    const visibleCount = [showTandem, showOpenClaw, showClaude].filter(Boolean).length;
+    const channels = [];
 
-    setBackendOptionVisible(btnTD, showTandem);
-    setBackendOptionVisible(btnOC, showOpenClaw);
-    setBackendOptionVisible(btnCL, showClaude);
-    setBackendOptionVisible(btnBoth, visibleCount > 1);
+    const matchesKey = (agent, key) => {
+      const type = (agent.type || '').toLowerCase();
+      const label = (agent.label || '').toLowerCase();
+      return type.includes(key) || label.includes(key);
+    };
 
-    if (backendSelector) {
-      backendSelector.style.display = visibleCount > 0 ? 'flex' : 'none';
+    // Antigravity agent
+    const antigravityAgent = agents.find((a) => matchesKey(a, 'antigravity'));
+    if (antigravityAgent) {
+      channels.push({
+        id: 'antigravity',
+        label: antigravityAgent.label || 'Antigravity',
+        title: 'Chat with Antigravity',
+      });
     }
 
-    if (currentMode === 'openclaw' && !showOpenClaw) switchBackend('tandem');
-    if (currentMode === 'claude' && !showClaude) switchBackend('tandem');
-    if (currentMode === 'both' && visibleCount <= 1) switchBackend('tandem');
+    // Claude agent
+    const claudeAgent = agents.find((a) => matchesKey(a, 'claude'));
+    if (claudeAgent) {
+      channels.push({
+        id: 'claude',
+        label: claudeAgent.label || 'Claude',
+        title: 'Chat with Claude',
+      });
+    }
+
+    // OpenCode agent
+    const opencodeAgent = agents.find((a) => matchesKey(a, 'opencode'));
+    if (opencodeAgent) {
+      channels.push({
+        id: 'opencode',
+        label: opencodeAgent.label || 'OpenCode',
+        title: 'Chat with OpenCode',
+      });
+    }
+
+    // Any other custom connected agents
+    for (const a of agents) {
+      if (
+        !matchesKey(a, 'antigravity') &&
+        !matchesKey(a, 'claude') &&
+        !matchesKey(a, 'opencode') &&
+        !matchesKey(a, 'openclaw')
+      ) {
+        const id = (a.type || a.label || a.id || '').toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+        if (id && !channels.some((c) => c.id === id)) {
+          channels.push({
+            id,
+            label: a.label || id,
+            title: `Chat with ${a.label || id}`,
+          });
+        }
+      }
+    }
+
+    // OpenClaw (if configured or connected)
+    const hasOpenClaw = agents.some((a) => matchesKey(a, 'openclaw')) || openclawBackend.isConnected();
+    if (hasOpenClaw) {
+      channels.push({
+        id: 'openclaw',
+        label: 'OpenClaw',
+        title: 'Use the local OpenClaw gateway',
+      });
+    }
+
+    // If no agents are connected, provide Tandem fallback
+    if (channels.length === 0) {
+      channels.push({
+        id: 'tandem',
+        label: primary?.label || 'Tandem',
+        title: "Use Tandem's built-in MCP/API chat",
+      });
+    }
+
+    // If 2 or more channels are available, add "All" mode
+    if (channels.length >= 2) {
+      channels.push({
+        id: 'both',
+        label: 'All',
+        title: 'Send to every connected backend / agent',
+      });
+    }
+
+    return channels;
   }
 
-  function updateTandemChannelLabel() {
-    const primary = tandemBackend.getPrimaryAgent?.();
-    const label = primary?.label || 'Tandem';
-    const labelEl = btnTD?.querySelector('span:last-child');
-    if (labelEl) labelEl.textContent = label;
+  function getChannelLabel(id) {
+    if (id === 'both') return 'All Agents';
+    if (id === 'openclaw') return 'OpenClaw';
+    if (id === 'antigravity') return 'Antigravity';
+    if (id === 'claude') return 'Claude';
+    if (id === 'opencode') return 'OpenCode';
+    if (id === 'tandem') return 'Tandem Wingman';
+    const found = getAvailableChannels().find((c) => c.id === id);
+    return found ? found.label : id;
+  }
+
+  function renderBackendSelector() {
+    if (!backendSelector) return;
+    const channels = getAvailableChannels();
+
+    backendSelector.replaceChildren();
+
+    for (const ch of channels) {
+      const btn = document.createElement('button');
+      btn.className = `backend-option ${currentMode === ch.id ? 'active' : ''}`;
+      btn.id = `btn-backend-${ch.id}`;
+      btn.title = ch.title;
+      btn.dataset.channelId = ch.id;
+
+      const dot = document.createElement('span');
+      dot.className = `backend-dot ${isChannelConnected(ch.id) ? 'connected' : ''}`;
+      dot.id = `dot-${ch.id}`;
+
+      const text = document.createElement('span');
+      text.textContent = ch.label;
+
+      btn.append(dot, text);
+      btn.addEventListener('click', () => switchBackend(ch.id));
+      backendSelector.appendChild(btn);
+    }
+
+    backendSelector.style.display = channels.length > 0 ? 'flex' : 'none';
+
+    if (!channels.some((c) => c.id === currentMode)) {
+      const fallback = channels[0]?.id || 'tandem';
+      switchBackend(fallback);
+    }
   }
 
   function updateBackendUI(activeId) {
-    updateTandemChannelLabel();
-    updateVisibleChannels();
-    if (btnTD) btnTD.classList.toggle('active', activeId === 'tandem');
-    if (btnOC) btnOC.classList.toggle('active', activeId === 'openclaw');
-    if (btnCL) btnCL.classList.toggle('active', activeId === 'claude');
-    if (btnBoth) btnBoth.classList.toggle('active', activeId === 'both');
+    if (backendSelector) {
+      for (const btn of backendSelector.querySelectorAll('.backend-option')) {
+        const chId = btn.dataset.channelId;
+        btn.classList.toggle('active', chId === activeId);
+        const dot = btn.querySelector('.backend-dot');
+        if (dot) {
+          dot.classList.toggle('connected', isChannelConnected(chId));
+        }
+      }
+    }
 
+    const connected = isChannelConnected(activeId);
+    wsDot.style.background = connected ? 'var(--success)' : 'var(--accent)';
+
+    const label = getChannelLabel(activeId);
     if (activeId === 'both') {
-      const ocConn = openclawBackend.isConnected();
-      const clConn = claudeBackend.isConnected();
-      const bothConnected = ocConn && clConn;
-      const anyConnected = ocConn || clConn;
-      wsDot.style.background = anyConnected ? 'var(--success)' : 'var(--accent)';
-      if (bothConnected) {
-        wsStatusText.textContent = 'Wingman + Claude Connected';
-      } else if (ocConn) {
-        wsStatusText.textContent = 'Wingman Connected, Claude Disconnected';
-      } else if (clConn) {
-        wsStatusText.textContent = 'Wingman Disconnected, Claude Connected';
-      } else {
-        wsStatusText.textContent = 'Wingman + Claude Disconnected';
-      }
-      inputEl.placeholder = 'Message to Wingman & Claude... (@wingman/@claude for specific)';
+      wsStatusText.textContent = connected ? 'All Agents Connected' : 'Agents Disconnected';
+      inputEl.placeholder = 'Message to all connected agents... (@agent for specific)';
     } else {
-      // Single backend mode
-      const backend = router.getActive();
-      if (backend) {
-        const connected = backend.isConnected();
-        wsDot.style.background = connected ? 'var(--success)' : 'var(--accent)';
-        wsStatusText.textContent = connected ? `${backend.name} Connected` : `${backend.name} Disconnected`;
-      }
-      if (activeId === 'claude') {
-        inputEl.placeholder = 'Message to Claude...';
-      } else if (activeId === 'tandem') {
-        inputEl.placeholder = 'Message to Tandem Wingman...';
-      } else {
-        inputEl.placeholder = 'Message to Wingman...';
-      }
+      wsStatusText.textContent = connected ? `${label} Connected` : `${label} Disconnected`;
+      inputEl.placeholder = `Message to ${label}... (@agent for specific)`;
     }
 
     // Update typing indicator text
     const typingText = typingEl.querySelector('span:last-child');
     if (typingText) {
       if (activeId === 'both') {
-        typingText.textContent = 'AI is thinking...';
-      } else if (activeId === 'claude') {
-        typingText.textContent = 'Claude is thinking...';
-      } else if (activeId === 'tandem') {
-        typingText.textContent = 'Tandem Wingman is thinking...';
+        typingText.textContent = 'Agents are thinking...';
       } else {
-        typingText.textContent = 'Wingman is typing...';
+        typingText.textContent = `${label} is typing...`;
       }
     }
   }
@@ -211,7 +270,7 @@ export function initChat() {
           role: 'user',
           text: child.querySelector('.msg-text').textContent,
           timestamp: child.querySelector('.msg-time').textContent,
-          source: 'user'
+          source: 'user',
         });
       }
     }
@@ -220,16 +279,27 @@ export function initChat() {
     clearStreaming();
 
     if (id === 'both') {
-      // In "both" mode, set router to openclaw as default but enable dual mode
-      router.setActive('openclaw');
+      // In "both" mode, enable dualMode and target all
       dualMode.setEnabled(true);
-      // Load combined history — OpenClaw first, then Claude
+      tandemBackend.setTargetAgent('all');
+      tandemBackend.loadHistory((msgs) => {
+        for (const m of msgs) {
+          const el = appendMessage(m.role, m.text, m.timestamp, m.source, m.image, m.actorLabel);
+          el.dataset.fromHistory = 'true';
+        }
+        for (const localMsg of localRobinMessages) {
+          const el = appendMessage(localMsg.role, localMsg.text, localMsg.timestamp, localMsg.source, localMsg.image);
+          el.dataset.localMessage = 'true';
+        }
+      });
+    } else if (id === 'openclaw') {
+      dualMode.setEnabled(false);
+      router.setActive('openclaw');
       openclawBackend.loadHistory((msgs) => {
         for (const m of msgs) {
           const el = appendMessage(m.role, m.text, m.timestamp, m.source, m.image, m.actorLabel);
           el.dataset.fromHistory = 'true';
         }
-        // Re-add local user messages
         for (const localMsg of localRobinMessages) {
           const el = appendMessage(localMsg.role, localMsg.text, localMsg.timestamp, localMsg.source, localMsg.image);
           el.dataset.localMessage = 'true';
@@ -237,34 +307,19 @@ export function initChat() {
       });
     } else {
       dualMode.setEnabled(false);
-      router.setActive(id);
-      if (id === 'openclaw') {
-        openclawBackend.loadHistory((msgs) => {
-          for (const m of msgs) {
-            const el = appendMessage(m.role, m.text, m.timestamp, m.source, m.image, m.actorLabel);
-            el.dataset.fromHistory = 'true';
-          }
-          // Re-add local user messages
-          for (const localMsg of localRobinMessages) {
-            const el = appendMessage(localMsg.role, localMsg.text, localMsg.timestamp, localMsg.source, localMsg.image);
-            el.dataset.localMessage = 'true';
-          }
-        });
-      } else if (id === 'tandem') {
-        tandemBackend.loadHistory((msgs) => {
-          for (const m of msgs) {
-            const el = appendMessage(m.role, m.text, m.timestamp, m.source, m.image, m.actorLabel);
-            el.dataset.fromHistory = 'true';
-          }
-          // Re-add local user messages
-          for (const localMsg of localRobinMessages) {
-            const el = appendMessage(localMsg.role, localMsg.text, localMsg.timestamp, localMsg.source, localMsg.image);
-            el.dataset.localMessage = 'true';
-          }
-        });
-      } else {
-        claudeBackend._loadHistory();
-      }
+      const targetAgent = id === 'tandem' ? null : id;
+      tandemBackend.setTargetAgent(targetAgent);
+      router.setActive('tandem');
+      tandemBackend.loadHistory((msgs) => {
+        for (const m of msgs) {
+          const el = appendMessage(m.role, m.text, m.timestamp, m.source, m.image, m.actorLabel);
+          el.dataset.fromHistory = 'true';
+        }
+        for (const localMsg of localRobinMessages) {
+          const el = appendMessage(localMsg.role, localMsg.text, localMsg.timestamp, localMsg.source, localMsg.image);
+          el.dataset.localMessage = 'true';
+        }
+      });
     }
 
     updateBackendUI(id);
@@ -273,38 +328,23 @@ export function initChat() {
     fetch('http://localhost:8765/config', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ general: { activeBackend: id } })
+      body: JSON.stringify({ general: { activeBackend: id } }),
     }).catch(() => { });
   }
 
-  if (btnTD) btnTD.addEventListener('click', () => switchBackend('tandem'));
-  if (btnOC) btnOC.addEventListener('click', () => switchBackend('openclaw'));
-  if (btnCL) btnCL.addEventListener('click', () => switchBackend('claude'));
-  if (btnBoth) btnBoth.addEventListener('click', () => switchBackend('both'));
+  // ── Connection status listeners ──
 
-  // ── Connection status dots ──
-
-  router.onConnectionChange((connected, backendId) => {
-    if (backendId === 'tandem') {
-      updateTandemChannelLabel();
-      if (dotTD) dotTD.classList.toggle('connected', connected);
-    } else if (backendId === 'openclaw') {
-      if (dotOC) dotOC.classList.toggle('connected', connected);
-    } else if (backendId === 'claude') {
-      if (dotCL) dotCL.classList.toggle('connected', connected);
-    }
-    if (dotBoth) dotBoth.classList.toggle('connected', tandemBackend.isConnected() || openclawBackend.isConnected() || claudeBackend.isConnected());
-
-    // Update status bar for current mode
-    if (currentMode === 'both') {
-      updateBackendUI('both');
-    } else if (backendId === router.getActiveId()) {
-      const backend = router.getActive();
-      const effectiveConnected = backend ? backend.isConnected() : connected;
-      wsDot.style.background = effectiveConnected ? 'var(--success)' : 'var(--accent)';
-      wsStatusText.textContent = effectiveConnected ? `${backend.name} Connected` : `${backend.name} Disconnected`;
-    }
+  router.onConnectionChange(() => {
+    updateBackendUI(currentMode);
   });
+
+  tandemBackend.onAgentsChanged(() => {
+    renderBackendSelector();
+    updateBackendUI(currentMode);
+  });
+
+  // Render initial selector state
+  renderBackendSelector();
 
   // ── Message handling ──
 
@@ -327,7 +367,11 @@ export function initChat() {
     typingEl.classList.toggle('active', typing);
     const typingText = typingEl.querySelector('span:last-child');
     if (typingText && typing) {
-      const name = backendId === 'openclaw' ? 'Wingman' : 'Claude';
+      let name = 'AI';
+      if (backendId === 'openclaw') name = 'Wingman';
+      else if (backendId === 'antigravity') name = 'Antigravity';
+      else if (backendId === 'claude') name = 'Claude';
+      else if (backendId === 'opencode') name = 'OpenCode';
       typingText.textContent = `${name} is typing...`;
     }
   });
@@ -437,24 +481,18 @@ export function initChat() {
     inputEl.style.height = '';
 
     if (currentMode === 'both') {
-      // Dual mode: parse @-mentions, send to appropriate backends
-      const { target, cleanText } = window.DualMode.parseMention(text);
+      // Dual/All mode: parse @-mentions, send to appropriate backends
+      const { cleanText } = window.DualMode.parseMention(text);
       if (!cleanText) return;
-
-      // Check if target backend(s) connected
-      if (target === 'claude' && !claudeBackend.isConnected()) return;
-      if (target === 'openclaw' && !openclawBackend.isConnected()) return;
-      if (target === 'both' && !openclawBackend.isConnected() && !claudeBackend.isConnected()) return;
 
       // Show user message (display original text with @-mention for clarity)
       const robinMsg = appendMessage('user', text, Date.now(), 'user');
       robinMsg.dataset.localMessage = 'true';
 
-      dualMode.sendMessage(text);
+      await dualMode.sendMessage(text);
     } else {
       // Single backend mode
-      const backend = router.getActive();
-      const activeId = router.getActiveId();
+      const activeId = currentMode;
 
       // OpenClaw: send through the official gateway chat path.
       if (activeId === 'openclaw') {
@@ -467,9 +505,13 @@ export function initChat() {
           appendMessage('assistant', '⚠️ Wingman could not reach OpenClaw.', Date.now(), 'wingman');
         }
       } else {
-        // Local and Claude backends both expose their own connection state.
-        if (!backend || !backend.isConnected()) return;
-        await router.sendMessage(text);
+        if (!tandemBackend.isConnected()) return;
+        const { target, cleanText } = window.DualMode.parseMention(text);
+        if (target && target !== 'all' && target !== activeId) {
+          await tandemBackend.sendMessage(cleanText, { targetAgent: target });
+        } else {
+          await tandemBackend.sendMessage(text, { targetAgent: activeId === 'tandem' ? undefined : activeId });
+        }
       }
     }
   }
@@ -488,31 +530,16 @@ export function initChat() {
 
   // ── Initialize ──
 
-  // Load saved backend from config. OpenClaw stays supported, but a missing
-  // gateway falls back to Tandem's built-in MCP/API chat.
+  // Load saved backend from config.
   router.connectAll();
   fetch('http://localhost:8765/config')
-    .then(r => r.json())
-    .then(cfg => {
+    .then((r) => r.json())
+    .then((cfg) => {
       const saved = cfg.general && cfg.general.activeBackend;
-      if (saved === 'tandem') switchBackend('tandem');
-      else if (saved === 'claude') {
-        switchBackend('claude');
-        setTimeout(() => {
-          const primary = tandemBackend.getPrimaryAgent?.();
-          if (currentMode === 'claude' && primary && primary.type !== 'claude-code') {
-            switchBackend('tandem');
-          }
-        }, 1500);
-      }
-      else if (saved === 'both') switchBackend('both');
-      else {
-        switchBackend('openclaw');
-        setTimeout(() => {
-          if (currentMode === 'openclaw' && !openclawBackend.isConnected() && tandemBackend.isConnected()) {
-            switchBackend('tandem');
-          }
-        }, 4500);
+      if (saved) {
+        switchBackend(saved);
+      } else {
+        switchBackend('tandem');
       }
     })
     .catch(() => switchBackend('tandem'));

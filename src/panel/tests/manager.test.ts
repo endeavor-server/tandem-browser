@@ -147,4 +147,44 @@ describe('PanelManager reply notifications', () => {
 
     expect(wingmanAlert).toHaveBeenCalledWith('Wingman replied', 'Sent an image.');
   });
+
+  it('uses Antigravity as the sender label for Antigravity replies', () => {
+    const win = createWindowStub();
+    const manager = new PanelManager(win as never);
+
+    manager.addChatMessage('antigravity', 'Antigravity here.');
+
+    expect(wingmanAlert).toHaveBeenCalledWith('Antigravity replied', 'Antigravity here.');
+  });
+
+  it('uses OpenCode as the sender label for OpenCode replies', () => {
+    const win = createWindowStub();
+    const manager = new PanelManager(win as never);
+
+    manager.addChatMessage('opencode', 'OpenCode completed the task.');
+
+    expect(wingmanAlert).toHaveBeenCalledWith('OpenCode replied', 'OpenCode completed the task.');
+  });
+
+  it('records targetAgent and filters messages by targetAgent', () => {
+    const win = createWindowStub();
+    const manager = new PanelManager(win as never);
+
+    manager.addChatMessage('user', 'To Antigravity', undefined, { targetAgent: 'antigravity' });
+    manager.addChatMessage('user', 'To Claude', undefined, { targetAgent: 'claude' });
+    manager.addChatMessage('user', 'To All', undefined, { targetAgent: 'all' });
+
+    const antigravityMsgs = manager.getChatMessages(10, 'antigravity');
+    const antigravityTexts = antigravityMsgs.map(m => m.text);
+    expect(antigravityTexts).toContain('To Antigravity');
+    expect(antigravityTexts).toContain('To All');
+    expect(antigravityTexts).not.toContain('To Claude');
+
+    const claudeMsgs = manager.getChatMessages(10, 'claude');
+    const claudeTexts = claudeMsgs.map(m => m.text);
+    expect(claudeTexts).toContain('To Claude');
+    expect(claudeTexts).toContain('To All');
+    expect(claudeTexts).not.toContain('To Antigravity');
+  });
 });
+
