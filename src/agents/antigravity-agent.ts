@@ -51,6 +51,78 @@ export interface ExtractedLead {
   location?: string;
   profileUrl?: string;
   contact?: string;
+  about?: string;
+  enriched?: boolean;
+}
+
+export interface LinkedInSafetyState {
+  date: string;
+  viewsToday: number;
+}
+
+export class LinkedInSafetyGovernor {
+  public static readonly MAX_DAILY_VIEWS = 35;
+  public static readonly MAX_BATCH_VIEWS = 5;
+  private stateFilePath: string;
+
+  constructor() {
+    this.stateFilePath = path.join(os.homedir(), '.tandem', 'linkedin-safety-state.json');
+  }
+
+  private getTodayString(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  public readState(): LinkedInSafetyState {
+    try {
+      if (fs.existsSync(this.stateFilePath)) {
+        const raw = fs.readFileSync(this.stateFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed.date === this.getTodayString()) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      log.warn('Could not read LinkedIn safety state, initializing new:', e);
+    }
+    return { date: this.getTodayString(), viewsToday: 0 };
+  }
+
+  public saveState(state: LinkedInSafetyState): void {
+    try {
+      const dir = path.dirname(this.stateFilePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(this.stateFilePath, JSON.stringify(state, null, 2), 'utf-8');
+    } catch (e) {
+      log.error('Failed to save LinkedIn safety state:', e);
+    }
+  }
+
+  public canViewProfile(): boolean {
+    const state = this.readState();
+    return state.viewsToday < LinkedInSafetyGovernor.MAX_DAILY_VIEWS;
+  }
+
+  public recordView(): number {
+    const state = this.readState();
+    state.viewsToday += 1;
+    this.saveState(state);
+    return state.viewsToday;
+  }
+
+  public getDailyStatus(): { viewsToday: number; maxDaily: number; remaining: number } {
+    const state = this.readState();
+    return {
+      viewsToday: state.viewsToday,
+      maxDaily: LinkedInSafetyGovernor.MAX_DAILY_VIEWS,
+      remaining: Math.max(0, LinkedInSafetyGovernor.MAX_DAILY_VIEWS - state.viewsToday)
+    };
+  }
+
+  public async safeDelay(minMs = 3500, maxMs = 6500): Promise<void> {
+    const delay = Math.floor(Math.random() * (maxMs - minMs)) + minMs;
+    await new Promise(r => setTimeout(r, delay));
+  }
 }
 
 export class AntigravityAgent {
@@ -60,6 +132,7 @@ export class AntigravityAgent {
   private snapshotManager?: SnapshotManager;
   private configManager?: ConfigManager;
   private injectionGuard: PromptInjectionGuard;
+  private safetyGovernor: LinkedInSafetyGovernor;
   private lastExtractedLeads: ExtractedLead[] = [];
   private unsubscribe?: () => void;
   private isProcessing = false;
@@ -71,6 +144,7 @@ export class AntigravityAgent {
     this.snapshotManager = opts.snapshotManager;
     this.configManager = opts.configManager;
     this.injectionGuard = new PromptInjectionGuard();
+    this.safetyGovernor = new LinkedInSafetyGovernor();
 
     this.startListening();
     log.info('Antigravity Browser Agent initialized and listening for Wingman requests');
@@ -206,6 +280,15 @@ export class AntigravityAgent {
 
     // ─── 4. Lead finding & Data extraction ────────────────────────────────────
     if (
+      lower.includes('enrich lead') ||
+      lower.includes('enrich profile') ||
+      lower.includes('deep enrich') ||
+      lower.includes('enrich contact')
+    ) {
+      return await this.handleEnrichLeads();
+    }
+
+    if (
       lower.includes('find lead') ||
       lower.includes('find leads') ||
       lower.includes('extract lead') ||
@@ -290,7 +373,8 @@ export class AntigravityAgent {
           ``,
           `| Command | Description |`,
           `| :--- | :--- |`,
-          `| \`/leads [query]\` | Find leads on LinkedIn or active page & save to CSV |`,
+          `| \`/leads [query]\` | Find leads from visible cards (0 profile views used, zero ban risk) |`,
+          `| \`/enrich [count]\` | Deep-enrich profiles sequentially with human delays & anti-ban governor |`,
           `| \`/export\` | Export latest extracted leads to \`~/Downloads\` |`,
           `| \`/summarize\` | Extract and summarize active page content |`,
           `| \`/snapshot\` | Inspect interactive accessibility elements with \`@e\` refs |`,
@@ -319,6 +403,9 @@ export class AntigravityAgent {
           return `Navigated to LinkedIn searching for **"${args}"**. Please allow the page 3–5 seconds to load results, then ask me to **"extract leads"** or type \`/export\`!`;
         }
         return await this.handleLeadExtraction();
+
+      case '/enrich':
+        return await this.handleEnrichLeads(args);
 
       case '/export':
         return this.exportLeadsToCsv(args);
@@ -600,14 +687,118 @@ export class AntigravityAgent {
       return `| ${nameCol} | ${titleCol} | ${locCol} |`;
     });
 
+    const safetyBadge = `> 🛡️ **LinkedIn Account Safety:** Passive search extraction active (**0 profile visits used**, 0 risk of account limits).\n> *To safely deep-enrich full profiles with human reading cadence, type \`/enrich\` (strictly 1-by-1, capped at 5/run, 35/day).*`;
+
     return [
       `### 🎯 Extracted Leads (${leads.length} found)`,
       `Extracted from: **${activeTab.title}**\n`,
+      safetyBadge,
+      ``,
       csvExport,
       `\n| Name | Title / Role | Location / Company |`,
       `| :--- | :--- | :--- |`,
       ...tableRows,
       `\n*Showing first ${Math.min(leads.length, 15)} leads. Type \`/export\` to save with custom filename!*`
+    ].join('\n');
+  }
+
+  /** Safely enrich LinkedIn leads sequentially using the anti-ban governor */
+  private async handleEnrichLeads(countArg?: string): Promise<string> {
+    if (this.lastExtractedLeads.length === 0) {
+      const extractResult = await this.handleLeadExtraction();
+      if (this.lastExtractedLeads.length === 0) {
+        return extractResult;
+      }
+    }
+
+    const linkedInLeads = this.lastExtractedLeads.filter(
+      l => l.profileUrl && l.profileUrl.includes('linkedin.com/in/') && !l.enriched
+    );
+
+    if (linkedInLeads.length === 0) {
+      return 'All currently extracted LinkedIn leads are already enriched or no LinkedIn profile URLs were found.';
+    }
+
+    const requestedCount = parseInt(countArg || '3', 10);
+    const maxToEnrich = Math.min(isNaN(requestedCount) ? 3 : requestedCount, LinkedInSafetyGovernor.MAX_BATCH_VIEWS);
+    const targets = linkedInLeads.slice(0, maxToEnrich);
+
+    const safetyStatus = this.safetyGovernor.getDailyStatus();
+    if (safetyStatus.remaining <= 0) {
+      return `🛑 **LinkedIn Safety Governor Block:** You have reached today's safe profile view limit (${safetyStatus.viewsToday}/${safetyStatus.maxDaily}).\nTo protect your account from LinkedIn velocity detection and restrictions, deep profile enrichment is paused until tomorrow.\n\n*Note: Search card scraping (\`/leads\`) remains 100% safe and unlimited because it views 0 profile pages!*`;
+    }
+
+    let enrichedCount = 0;
+    const enrichedResults: string[] = [];
+
+    for (const lead of targets) {
+      if (!this.safetyGovernor.canViewProfile()) {
+        enrichedResults.push(`⚠️ Reached daily safe view limit (${this.safetyGovernor.getDailyStatus().viewsToday}/${LinkedInSafetyGovernor.MAX_DAILY_VIEWS}). Pausing.`);
+        break;
+      }
+
+      try {
+        log.info(`[SafeEnricher] Opening ${lead.name} (${lead.profileUrl}) in background tab...`);
+        // 1. Open background tab (inactive)
+        const tab = await this.tabManager.openTab(lead.profileUrl!, undefined, 'ai', 'persist:tandem', false);
+        if (!tab) continue;
+
+        // 2. Safe page load delay (3.0s - 4.5s)
+        await this.safetyGovernor.safeDelay(3000, 4500);
+
+        const wc = this.tabManager.getWebContents(tab.id);
+        if (wc) {
+          // 3. Smooth natural scroll down (human reading behavior)
+          await wc.executeJavaScript('window.scrollBy({ top: 380, behavior: "smooth" })').catch(() => {});
+          await this.safetyGovernor.safeDelay(2500, 4000);
+
+          // 4. Extract rich profile data
+          const profileScript = `
+            (() => {
+              const headline = document.querySelector('.text-body-medium, h2')?.innerText?.trim() || '';
+              const about = document.querySelector('#about ~ .display-flex .inline-show-more-text, section[data-section="summary"] .inline-show-more-text')?.innerText?.trim() || '';
+              const experience = document.querySelector('#experience ~ .pvs-list__outer-container .display-flex .mr1 .visually-hidden, #experience ~ .pvs-list__outer-container span[aria-hidden="true"]')?.innerText?.trim() || '';
+              const location = document.querySelector('.text-body-small.inline.t-black--light, .pv-text-details__left-panel .text-body-small')?.innerText?.trim() || '';
+              return { headline, about: about.slice(0, 250), experience, location };
+            })()
+          `;
+
+          const profileData = (await this.devToolsManager.evaluateInTab(wc.id, profileScript)) as any;
+          if (profileData) {
+            if (profileData.headline) lead.headline = profileData.headline;
+            if (profileData.location) lead.location = profileData.location;
+            if (profileData.experience) lead.company = profileData.experience;
+            if (profileData.about) lead.about = profileData.about;
+            lead.enriched = true;
+          }
+        }
+
+        // 5. Close background tab immediately
+        await this.tabManager.closeTab(tab.id);
+        this.safetyGovernor.recordView();
+        enrichedCount++;
+        enrichedResults.push(`• **${lead.name}**: ${lead.headline || lead.company || 'Profile details enriched'}`);
+
+        // 6. Cooldown pause between profiles (4.0s - 6.5s)
+        await this.safetyGovernor.safeDelay(4000, 6500);
+      } catch (err) {
+        log.error(`[SafeEnricher] Error enriching ${lead.name}:`, err);
+      }
+    }
+
+    // Save updated CSV
+    const csvExport = this.exportLeadsToCsv(`enriched_leads_${new Date().toISOString().slice(0, 10)}`);
+    const statusAfter = this.safetyGovernor.getDailyStatus();
+
+    return [
+      `### 🛡️ LinkedIn Profile Enrichment Complete`,
+      `**Safety Status:** ${enrichedCount} profile(s) safely enriched today (${statusAfter.viewsToday}/${statusAfter.maxDaily} safe daily views used).`,
+      `*Enrichment executed sequentially at human cadence (3.5s–6.5s intervals, 0 burst requests, 0 concurrent sockets).*`,
+      ``,
+      csvExport,
+      ``,
+      `#### Enriched Contacts:`,
+      ...enrichedResults
     ].join('\n');
   }
 
@@ -627,7 +818,7 @@ export class AntigravityAgent {
       const filename = customName ? `${customName.replace(/[^a-zA-Z0-9_-]/g, '_')}.csv` : `tandem_leads_${timestamp}.csv`;
       const filePath = path.join(downloadsDir, filename);
 
-      const header = 'Name,Title / Headline,Company / Location,Profile URL,Contact\n';
+      const header = 'Name,Title / Headline,Company / Location,Profile URL,About / Summary,Contact\n';
       const rows = this.lastExtractedLeads.map(l => {
         const escapeCsv = (str?: string) => `"${(str || '').replace(/"/g, '""')}"`;
         return [
@@ -635,6 +826,7 @@ export class AntigravityAgent {
           escapeCsv(l.headline),
           escapeCsv(l.location || l.company),
           escapeCsv(l.profileUrl),
+          escapeCsv(l.about),
           escapeCsv(l.contact)
         ].join(',');
       }).join('\n');

@@ -170,7 +170,7 @@ describe('AntigravityAgent Phase 1 Capabilities', () => {
     );
   });
 
-  it('handles lead extraction and automated CSV generation', async () => {
+  it('handles lead extraction with LinkedIn safety shield banner', async () => {
     mockDevToolsManager.evaluateInTab.mockResolvedValueOnce([
       { name: 'Alice Smith', headline: 'VP of AI', location: 'London', profileUrl: 'https://linkedin.com/in/alicesmith' }
     ]);
@@ -191,7 +191,69 @@ describe('AntigravityAgent Phase 1 Capabilities', () => {
 
     expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
       'antigravity',
-      expect.stringContaining('.csv'),
+      expect.stringContaining('LinkedIn Account Safety'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles /enrich command safely with human delays and tab cleanup', async () => {
+    mockDevToolsManager.evaluateInTab
+      // First call for /leads
+      .mockResolvedValueOnce([
+        { name: 'Bob Jones', headline: 'CTO', location: 'Bengaluru', profileUrl: 'https://linkedin.com/in/bobjones' }
+      ])
+      // Second call for profile enrichment
+      .mockResolvedValueOnce({
+        headline: 'CTO at DeepTech',
+        about: 'Passionate AI architect',
+        experience: 'DeepTech Systems',
+        location: 'Bengaluru, India'
+      });
+
+    mockTabManager.openTab.mockResolvedValueOnce({
+      id: 'tab-worker-1',
+      url: 'https://linkedin.com/in/bobjones'
+    });
+    mockTabManager.closeTab = vi.fn().mockResolvedValue(true);
+
+    const agent = new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    // Mock safeDelay to be fast during unit tests
+    (agent as any).safetyGovernor.safeDelay = vi.fn().mockResolvedValue(undefined);
+
+    // Initial lead extraction
+    await chatListener!({
+      id: 6,
+      from: 'user',
+      text: '/leads',
+      targetAgent: 'antigravity'
+    });
+
+    // Run /enrich
+    await chatListener!({
+      id: 7,
+      from: 'user',
+      text: '/enrich 1',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockTabManager.openTab).toHaveBeenCalledWith(
+      'https://linkedin.com/in/bobjones',
+      undefined,
+      'ai',
+      'persist:tandem',
+      false
+    );
+    expect(mockTabManager.closeTab).toHaveBeenCalledWith('tab-worker-1');
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('LinkedIn Profile Enrichment Complete'),
       undefined,
       expect.objectContaining({ actorLabel: 'Antigravity' })
     );
