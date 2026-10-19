@@ -528,6 +528,17 @@ export function initChat() {
   });
   sendBtn.addEventListener('click', sendMessage);
 
+  // Quick Action Chips listener
+  document.querySelectorAll('.w-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const cmd = chip.dataset.cmd;
+      if (cmd) {
+        inputEl.value = cmd;
+        sendMessage();
+      }
+    });
+  });
+
   // ── Initialize ──
 
   // Load saved backend from config.

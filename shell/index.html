@@ -297,6 +297,14 @@
               style="width:7px;height:7px;border-radius:50%;background:var(--accent);"></span>
             <span id="ws-status-text">Disconnected</span>
           </div>
+          <div class="wingman-quick-actions" id="wingman-quick-actions">
+            <button class="w-chip" data-cmd="/mark">🎯 Mark</button>
+            <button class="w-chip" data-cmd="create one new gmail for me">🚀 New Gmail</button>
+            <button class="w-chip" data-cmd="/summarize">📄 Summarize</button>
+            <button class="w-chip" data-cmd="/extract">📊 Extract</button>
+            <button class="w-chip" data-cmd="/leads">👥 Leads</button>
+            <button class="w-chip" data-cmd="/dismiss">🧹 Sweep</button>
+          </div>
           <div class="approval-container" id="approval-container" style="display:none;"></div>
           <div class="chat-messages" id="chat-messages"></div>
           <div class="typing-indicator" id="typing-indicator">
@@ -305,8 +313,13 @@
           </div>
           <div id="chat-image-preview" class="chat-image-preview" style="display:none;"></div>
           <div class="chat-input-wrap">
-            <textarea class="chat-input" id="chat-input" placeholder="Message to Wingman..." rows="1"></textarea>
-            <button class="chat-send-btn" id="chat-send-btn">▶</button>
+            <textarea class="chat-input" id="chat-input" placeholder="Message to Wingman or type /..." rows="1"></textarea>
+            <button class="chat-send-btn" id="chat-send-btn" title="Send (Enter)">▶</button>
+          </div>
+          <div class="chat-input-hints">
+            <span><kbd>↵</kbd> Send</span>
+            <span><kbd>⇧↵</kbd> Newline</span>
+            <span><kbd>/</kbd> Commands</span>
           </div>
         </div>
         <!-- Screenshots tab -->

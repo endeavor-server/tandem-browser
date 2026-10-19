@@ -68,17 +68,24 @@ async function sendUserMessage(text) {
 
   // Wait for Antigravity's response via long poll /chat/wait
   const startTime = Date.now();
+  let lastProgressText = null;
   while (Date.now() - startTime < 35000) {
     const waitRes = await api(`/chat/wait?since_id=${msgId}&timeout_ms=5000`);
     if (waitRes.messages && waitRes.messages.length > 0) {
-      const agentReply = waitRes.messages.find(m => m.from === 'antigravity' && m.id > msgId);
-      if (agentReply) {
-        return agentReply.text;
+      const agentReplies = waitRes.messages.filter(m => m.from === 'antigravity' && m.id > msgId);
+      // If there's a non-step message, return it as final
+      const finalReply = agentReplies.find(m => !m.text.startsWith('⏳ **Step'));
+      if (finalReply) {
+        return finalReply.text;
+      }
+      if (agentReplies.length > 0) {
+        lastProgressText = agentReplies[agentReplies.length - 1].text;
       }
     }
     // brief sleep if not yet received
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, 600));
   }
+  if (lastProgressText) return lastProgressText;
   throw new Error(`Timeout waiting for Antigravity response to: "${text}"`);
 }
 
@@ -205,7 +212,7 @@ async function runE2ETests() {
     'Compound plan executed both navigation and summarization'
   );
 
-  await sleep(1500);
+  await sleep(3500);
   const hnStatus = await api('/status');
   assert(hnStatus.url.includes('news.ycombinator.com'), `Browser navigated to: ${hnStatus.url}`);
 
