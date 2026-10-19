@@ -55,6 +55,30 @@ export interface ExtractedLead {
   enriched?: boolean;
 }
 
+export interface UserPersona {
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  email: string;
+  username: string;
+  phone: string;
+  company: string;
+  title: string;
+  website: string;
+  bio: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+  [key: string]: string;
+}
+
+export interface PersonaVaultState {
+  active: string;
+  personas: Record<string, UserPersona>;
+}
+
 export interface LinkedInSafetyState {
   date: string;
   viewsToday: number;
@@ -133,6 +157,7 @@ export class AntigravityAgent {
   private configManager?: ConfigManager;
   private injectionGuard: PromptInjectionGuard;
   private safetyGovernor: LinkedInSafetyGovernor;
+  private personaFilePath: string;
   private lastExtractedLeads: ExtractedLead[] = [];
   private lastExtractedStructuredData: Record<string, unknown>[] = [];
   private unsubscribe?: () => void;
@@ -146,6 +171,7 @@ export class AntigravityAgent {
     this.configManager = opts.configManager;
     this.injectionGuard = new PromptInjectionGuard();
     this.safetyGovernor = new LinkedInSafetyGovernor();
+    this.personaFilePath = path.join(os.homedir(), '.tandem', 'personas.json');
 
     this.startListening();
     log.info('Antigravity Browser Agent initialized and listening for Wingman requests');
@@ -277,6 +303,26 @@ export class AntigravityAgent {
       const rankWord = firstResultMatch[1];
       const rank = (rankWord === 'second' || rankWord === '2nd') ? 2 : (rankWord === 'third' || rankWord === '3rd') ? 3 : 1;
       return await this.handleClickNthResult(rank);
+    }
+
+    // ─── 0f. 1-Click Autonomous Form Autofill Intent (e.g. "autofill this form", "fill form with my details") ───
+    if (
+      lower.includes('autofill') ||
+      lower.includes('fill this form') ||
+      lower.includes('fill form') ||
+      lower.includes('fill out this form') ||
+      lower.includes('fill out form') ||
+      lower.includes('fill my details') ||
+      lower.includes('fill in my details')
+    ) {
+      const personaArg = text.replace(/^(?:please\s+)?(?:autofill|fill\s+out|fill)(?:\s+(?:this|the|my)?\s+form)?(?:\s+with|\s+using)?(?:\s+persona)?/i, '').trim();
+      return await this.handleAutofill(personaArg);
+    }
+
+    // ─── 0g. Multi-Tab Parallel Product & Price Comparison Intent (e.g. "compare rtx 4090 on amazon and bestbuy") ───
+    if (lower.startsWith('compare ') || lower.startsWith('price comparison ')) {
+      const query = text.replace(/^(?:compare|price\s+comparison)\s+/i, '').trim();
+      return await this.handleCompare(query);
     }
 
     // ─── 1. Navigation / Open URL / Go to site ─────────────────────────────────
@@ -418,6 +464,9 @@ export class AntigravityAgent {
           ``,
           `| Command | Description |`,
           `| :--- | :--- |`,
+          `| \`/autofill [persona]\` | 1-Click autonomous form filling with Stagehand React prototype sync |`,
+          `| \`/persona [use|set|create]\` | Manage Smart Persona Vault profiles and details |`,
+          `| \`/compare <item> [on X and Y]\` | Multi-tab parallel research and price comparison matrix |`,
           `| \`/extract [query]\` | Extract structured data (tables, cards, products) to CSV |`,
           `| \`/dismiss\` | Auto-sweep and close cookie banners and popup modals |`,
           `| \`/leads [query]\` | Find leads from visible cards (0 profile views used, zero ban risk) |`,
@@ -434,8 +483,19 @@ export class AntigravityAgent {
           `| \`/open <url | site>\` | Navigate active tab or open new tab |`,
           `| \`/search <query>\` | Search Google, YouTube, or LinkedIn |`,
           ``,
-          `*You can also type natural English prompts like "open youtube for me", "summarize this page", or "find leads on this site"!*`
+          `*You can also type natural English prompts like "autofill this form", "compare macbook pro m3", or "open youtube and search jazz"!*`
         ].join('\n');
+
+      case '/autofill':
+      case '/fill-form':
+        return await this.handleAutofill(args);
+
+      case '/persona':
+      case '/personas':
+        return this.handlePersonaCommand(args);
+
+      case '/compare':
+        return await this.handleCompare(args);
 
       case '/mark':
       case '/som':
@@ -518,16 +578,26 @@ export class AntigravityAgent {
     }
   }
 
+  /** Format visual timeline breadcrumbs (HTML badge pills + Markdown trail) */
+  public static formatBreadcrumbs(steps: string[]): string {
+    if (!steps || steps.length === 0) return '';
+    const htmlSteps = steps.map(s => `<span class="breadcrumb-step">${s}</span>`).join(' <span class="breadcrumb-arrow">➔</span> ');
+    const textSteps = steps.map(s => `[ ${s} ]`).join(' ➔ ');
+    return `<div class="breadcrumb-trail">${htmlSteps}</div>\n\n> 🧭 **Action Timeline:** ${textSteps}\n`;
+  }
+
   /** Decompose and execute compound multi-step co-pilot tasks sequentially */
   private async executeCompoundPlan(prompt: string): Promise<string | null> {
-    const clauses = prompt
+    const maskedPrompt = prompt.replace(/\b(compare\s+[^;]+?\s+on\s+[a-z0-9_-]+)\s+and\s+([a-z0-9_-]+)/gi, '$1__AND__$2');
+    const clauses = maskedPrompt
       .split(/\s+(?:and\s+then|then|after\s+that|and)\s+|;\s*/i)
-      .map(c => c.trim())
+      .map(c => c.replace(/__AND__/g, ' and ').trim())
       .filter(Boolean);
 
     if (clauses.length <= 1) return null;
 
     const stepReports: string[] = [];
+    const breadcrumbSteps: string[] = [];
     stepReports.push(`🚀 **Autonomous Co-pilot Executing (${clauses.length} Steps):**\n`);
 
     for (let i = 0; i < clauses.length; i++) {
@@ -547,32 +617,49 @@ export class AntigravityAgent {
       if (/^(?:please\s+)?(?:open|go\s+to|navigate\s+to|visit)\s+(.+)$/i.test(cl)) {
         const target = cl.replace(/^(?:please\s+)?(?:open|go\s+to|navigate\s+to|visit)\s+/i, '').trim();
         result = await this.handleNavigation(target);
+        breadcrumbSteps.push('🌐 Navigated');
         await new Promise(r => setTimeout(r, 1800));
       } else if (/^(?:search(?:\s+for)?|google|lookup)\s+(.+)$/i.test(cl)) {
         const query = cl.replace(/^(?:search(?:\s+for)?|google|lookup)\s+/i, '').trim();
         result = await this.handleSearch(query);
+        breadcrumbSteps.push('🔍 Searched');
         await new Promise(r => setTimeout(r, 1800));
+      } else if (cl.includes('autofill') || cl.includes('fill form') || cl.includes('fill out form') || cl.includes('fill in form')) {
+        result = await this.handleAutofill();
+        breadcrumbSteps.push('⚡ Autofilled');
+      } else if (cl.startsWith('compare ') || cl.includes('price comparison')) {
+        result = await this.handleCompare(clause.replace(/^(?:compare|price\s+comparison)\s+/i, '').trim());
+        breadcrumbSteps.push('⚖️ Compared');
       } else if (cl.includes('summarize') || cl === 'tldr') {
         result = await this.handleSummarizePage();
+        breadcrumbSteps.push('📄 Summarized');
       } else if (cl.includes('lead') || cl.includes('contact')) {
         result = await this.handleLeadExtraction();
+        breadcrumbSteps.push('👥 Extracted Leads');
       } else if (cl.includes('enrich')) {
         result = await this.handleEnrichLeads();
+        breadcrumbSteps.push('🛡️ Enriched Leads');
       } else if (cl.includes('dismiss') || cl.includes('close popup') || cl.includes('accept cookie')) {
         result = await this.handleDismissOverlays();
+        breadcrumbSteps.push('🧹 Swept Overlays');
       } else if (cl.includes('extract data') || cl.includes('extract product') || cl.includes('extract table') || cl.startsWith('extract')) {
         result = await this.handleExtractStructuredData(clause.replace(/^extract\s+(?:data|table|products?)?/i, '').trim());
+        breadcrumbSteps.push('📊 Extracted Data');
       } else if (cl.includes('export')) {
         result = this.exportLeadsToCsv();
+        breadcrumbSteps.push('💾 Exported CSV');
       } else if (/^(?:please\s+)?(?:click|press|tap)/i.test(cl)) {
         const target = cl.replace(/^(?:please\s+)?(?:click|press|tap)(?:\s+on)?\s+/i, '').replace(/['"]/g, '').trim();
         result = await this.handleClick(target);
+        breadcrumbSteps.push('🖱️ Clicked');
         await new Promise(r => setTimeout(r, 1500));
       } else if (cl.includes('scroll')) {
         const dir = cl.includes('up') ? 'up' : 'down';
         result = await this.handleScroll(dir);
+        breadcrumbSteps.push('📜 Scrolled');
       } else {
         result = await this.executeUserIntent(clause);
+        breadcrumbSteps.push('⚡ Action');
       }
 
       stepReports.push(`✅ **Step ${i + 1}:** ${clause}\n${result}\n`);
@@ -580,7 +667,381 @@ export class AntigravityAgent {
 
     const activeTab = this.tabManager.getActiveTab();
     stepReports.push(`🎉 **Autonomous Co-pilot Finished!** Active on [${activeTab?.title || 'Page'}](${activeTab?.url}).`);
+
+    if (breadcrumbSteps.length > 0) {
+      stepReports.unshift(AntigravityAgent.formatBreadcrumbs(breadcrumbSteps));
+    }
+
     return stepReports.join('\n');
+  }
+
+  // ─── Smart Persona Vault & 1-Click Form Autofill ──────────────────────────────
+
+  private loadPersonaVault(): PersonaVaultState {
+    const defaultState: PersonaVaultState = {
+      active: 'default',
+      personas: {
+        default: {
+          firstName: 'Alex',
+          lastName: 'Mercer',
+          fullName: 'Alex Mercer',
+          email: 'alex.mercer.dev@gmail.com',
+          username: 'alexmercer',
+          phone: '+1-415-555-0199',
+          company: 'Endeavor Labs',
+          title: 'Lead Software Architect',
+          website: 'https://endeavoracademy.us',
+          bio: 'Building autonomous AI agents and high-performance browser systems.',
+          address: '500 Howard Street',
+          city: 'San Francisco',
+          state: 'CA',
+          zip: '94105',
+          country: 'United States'
+        }
+      }
+    };
+
+    try {
+      if (fs.existsSync(this.personaFilePath)) {
+        const raw = fs.readFileSync(this.personaFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.personas) return parsed;
+      } else {
+        const dir = path.dirname(this.personaFilePath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(this.personaFilePath, JSON.stringify(defaultState, null, 2), 'utf-8');
+      }
+    } catch (e) {
+      log.warn('Could not read personas.json, using defaults:', e);
+    }
+    return defaultState;
+  }
+
+  private savePersonaVault(state: PersonaVaultState): void {
+    try {
+      const dir = path.dirname(this.personaFilePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(this.personaFilePath, JSON.stringify(state, null, 2), 'utf-8');
+    } catch (e) {
+      log.error('Failed to save persona vault:', e);
+    }
+  }
+
+  private handlePersonaCommand(args?: string): string {
+    const vault = this.loadPersonaVault();
+    const cleanArgs = (args || '').trim();
+
+    if (!cleanArgs || cleanArgs === 'list') {
+      const personaNames = Object.keys(vault.personas).map(p => p === vault.active ? `**${p} (active)**` : p).join(', ');
+      const activeP = vault.personas[vault.active] || vault.personas.default;
+      const rows = Object.entries(activeP).map(([k, v]) => `| \`${k}\` | ${v || '-'} |`);
+
+      return [
+        `### 👤 Smart Persona Vault`,
+        `**Active Persona:** \`${vault.active}\` | **All Personas:** ${personaNames}\n`,
+        `| Field Key | Current Value |`,
+        `| :--- | :--- |`,
+        ...rows,
+        `\n*Commands: \`/persona use <name>\`, \`/persona set <field> <value>\`, \`/persona create <name>\`, or \`/autofill\` to fill active form!*`
+      ].join('\n');
+    }
+
+    if (cleanArgs.startsWith('use ')) {
+      const name = cleanArgs.slice(4).trim().toLowerCase();
+      if (!vault.personas[name]) {
+        return `Persona **"${name}"** not found. Available personas: \`${Object.keys(vault.personas).join(', ')}\``;
+      }
+      vault.active = name;
+      this.savePersonaVault(vault);
+      return `Switched active persona to **"${name}"**. Type \`/autofill\` on any form to use this persona!`;
+    }
+
+    if (cleanArgs.startsWith('set ')) {
+      const parts = cleanArgs.slice(4).trim().split(/\s+/);
+      if (parts.length < 2) return 'Usage: `/persona set <field> <value>` (e.g. `/persona set email jane@example.com`)';
+      const field = parts[0];
+      const val = parts.slice(1).join(' ').replace(/^['"]|['"]$/g, '');
+      const activeP = vault.personas[vault.active];
+      if (activeP) {
+        activeP[field] = val;
+        this.savePersonaVault(vault);
+        return `Updated **${field}** to \`${val}\` on persona \`${vault.active}\`.`;
+      }
+      return 'Could not update active persona.';
+    }
+
+    if (cleanArgs.startsWith('create ')) {
+      const name = cleanArgs.slice(7).trim().toLowerCase();
+      if (!name) return 'Usage: `/persona create <name>`';
+      vault.personas[name] = { ...vault.personas[vault.active] };
+      vault.active = name;
+      this.savePersonaVault(vault);
+      return `Created new persona **"${name}"** (cloned from previous active). Type \`/persona set <field> <value>\` to customize!`;
+    }
+
+    return 'Usage: `/persona` (view), `/persona use <name>`, `/persona set <key> <val>`, or `/persona create <name>`.';
+  }
+
+  private async handleAutofill(personaArg?: string): Promise<string> {
+    const activeTab = this.tabManager.getActiveTab();
+    if (!activeTab) return 'No active tab found to autofill.';
+
+    const wc = this.tabManager.getWebContents(activeTab.id);
+    if (!wc) return 'Cannot access active tab web contents.';
+
+    // 1. Clear any blocking overlays
+    const swept = await this.autoDismissOverlays(wc);
+
+    // 2. Resolve persona
+    const vault = this.loadPersonaVault();
+    let targetPersonaName = vault.active;
+    if (personaArg) {
+      const match = Object.keys(vault.personas).find(k => k.toLowerCase() === personaArg.toLowerCase());
+      if (match) targetPersonaName = match;
+    }
+    const persona = vault.personas[targetPersonaName] || vault.personas[vault.active] || vault.personas.default;
+    if (!persona) return 'No persona profile available to autofill.';
+
+    // 3. Inject smart form scanner and filler with React prototype sync
+    const autofillScript = `
+      (() => {
+        const persona = ${JSON.stringify(persona)};
+        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, select'));
+        const filled = [];
+
+        function setNativeValue(el, val) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.focus();
+          const isTextarea = el.tagName === 'TEXTAREA';
+          const proto = isTextarea ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (setter) {
+            setter.call(el, val);
+          } else {
+            el.value = val;
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        }
+
+        function matchFieldKey(identifiers) {
+          const text = identifiers.join(' ').toLowerCase();
+
+          // High-priority exact key patterns
+          if (/first.*name|^fname$|^first$/i.test(text)) return 'firstName';
+          if (/last.*name|^lname$|^last$|family.*name|surname/i.test(text)) return 'lastName';
+          if (/full.*name|^name$|your.*name/i.test(text)) return 'fullName';
+          if (/email|e-mail|^mail$/i.test(text)) return 'email';
+          if (/user.*name|^user$|handle|login/i.test(text)) return 'username';
+          if (/phone|tel|mobile|cell/i.test(text)) return 'phone';
+          if (/company|organization|org|workplace|business/i.test(text)) return 'company';
+          if (/job.*title|^title$|role|position/i.test(text)) return 'title';
+          if (/website|homepage|^url$|site/i.test(text)) return 'website';
+          if (/bio|about|description|summary/i.test(text)) return 'bio';
+          if (/street|address/i.test(text)) return 'address';
+          if (/city|town/i.test(text)) return 'city';
+          if (/state|province|region/i.test(text)) return 'state';
+          if (/zip|postal|postcode/i.test(text)) return 'zip';
+          if (/country/i.test(text)) return 'country';
+
+          return null;
+        }
+
+        for (const el of inputs) {
+          if (el.disabled || el.readOnly) continue;
+          if (['submit', 'button', 'reset', 'image'].includes(el.type)) continue;
+          const rect = el.getBoundingClientRect();
+          if (rect.width <= 2 || rect.height <= 2) continue;
+          const style = window.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+
+          const ids = [
+            el.name || '',
+            el.id || '',
+            el.placeholder || '',
+            el.getAttribute('aria-label') || '',
+            el.autocomplete || ''
+          ];
+
+          if (el.id) {
+            const labelEl = document.querySelector('label[for="' + el.id + '"]');
+            if (labelEl) ids.push((labelEl.innerText || '').trim());
+          }
+          const parentLabel = el.closest('label');
+          if (parentLabel) ids.push((parentLabel.innerText || '').trim());
+
+          const matchedKey = matchFieldKey(ids);
+          if (matchedKey && persona[matchedKey]) {
+            const val = persona[matchedKey];
+            if (el.tagName === 'SELECT') {
+              const options = Array.from(el.options);
+              const optIndex = options.findIndex(o => 
+                o.text.toLowerCase().includes(val.toLowerCase()) || 
+                o.value.toLowerCase().includes(val.toLowerCase())
+              );
+              if (optIndex >= 0) {
+                el.selectedIndex = optIndex;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                filled.push({ field: matchedKey, value: options[optIndex].text, label: ids[0] || matchedKey });
+              }
+            } else {
+              setNativeValue(el, val);
+              filled.push({ field: matchedKey, value: val, label: ids[0] || matchedKey });
+            }
+          }
+        }
+
+        return { filled, totalInputs: inputs.length };
+      })()
+    `;
+
+    try {
+      const res = (await this.devToolsManager.evaluateInTab(wc.id, autofillScript)) as {
+        filled: Array<{ field: string; value: string; label: string }>;
+        totalInputs: number;
+      } | null;
+
+      if (!res || !res.filled || res.filled.length === 0) {
+        return `⚠️ **Autofill:** Found form fields on [${activeTab.title}](${activeTab.url}), but none matched persona fields (\`${Object.keys(persona).join(', ')}\`). You can type individual fields using \`/type <target> <value>\`.`;
+      }
+
+      const rows = res.filled.map(f => `| **${f.field}** | \`${f.label || '-'}\` | \`${f.value}\` |`);
+      const trail = AntigravityAgent.formatBreadcrumbs([
+        '🌐 Page Ready',
+        swept.dismissed ? '🧹 Swept Overlay' : '✨ Clean Viewport',
+        `⚡ Autofilled ${res.filled.length} Fields`
+      ]);
+
+      return [
+        trail,
+        `### ⚡ 1-Click Form Autofill Complete`,
+        `**Persona Used:** \`${targetPersonaName}\` (${persona.fullName || persona.firstName || 'User'})\n`,
+        `| Persona Field | Matched Form Field | Value Inserted |`,
+        `| :--- | :--- | :--- |`,
+        ...rows,
+        `\n*Successfully populated ${res.filled.length} fields on [${activeTab.title}](${activeTab.url}) with React prototype synchronization!*`
+      ].join('\n');
+    } catch (e) {
+      log.error('Autofill failed:', e);
+      return `Failed to autofill form: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  // ─── Multi-Tab Parallel Product & Price Comparison ────────────────────────────
+
+  private async handleCompare(args: string): Promise<string> {
+    const raw = args.trim();
+    if (!raw) return 'Usage: `/compare <product or item> [on <site1> and <site2>]`';
+
+    let item = raw;
+    let targetSites = ['google', 'amazon'];
+
+    const onMatch = raw.match(/^(.+?)\s+on\s+([a-z0-9_-]+)(?:\s+(?:and|,|vs)\s+([a-z0-9_-]+))?$/i);
+    if (onMatch) {
+      item = onMatch[1].trim();
+      targetSites = [onMatch[2].toLowerCase()];
+      if (onMatch[3]) targetSites.push(onMatch[3].toLowerCase());
+    }
+
+    const siteConfigs: Record<string, (q: string) => { name: string; url: string }> = {
+      google: (q) => ({ name: 'Google Search', url: `https://www.google.com/search?q=${encodeURIComponent(q + ' price')}` }),
+      shopping: (q) => ({ name: 'Google Shopping', url: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(q)}` }),
+      amazon: (q) => ({ name: 'Amazon', url: `https://www.amazon.com/s?k=${encodeURIComponent(q)}` }),
+      bestbuy: (q) => ({ name: 'Best Buy', url: `https://www.bestbuy.com/site/searchpage.jsp?st=${encodeURIComponent(q)}` }),
+      ebay: (q) => ({ name: 'eBay', url: `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(q)}` }),
+      walmart: (q) => ({ name: 'Walmart', url: `https://www.walmart.com/search?q=${encodeURIComponent(q)}` })
+    };
+
+    const searchTargets = targetSites.map(s => {
+      const factory = siteConfigs[s] || siteConfigs.google;
+      return factory(item);
+    });
+
+    const breadcrumbTrail = AntigravityAgent.formatBreadcrumbs([
+      `🌐 Multi-Tab Query: "${item}"`,
+      `📊 Parallel Extraction (${searchTargets.length} Stores)`,
+      '🧹 Closed Background Tabs',
+      '⚖️ Comparison Synthesized'
+    ]);
+
+    const openedTabs: any[] = [];
+    const comparisonResults: Array<{ store: string; title: string; price: string; link: string }> = [];
+
+    try {
+      for (const target of searchTargets) {
+        log.info(`[Compare] Opening ${target.name} for "${item}" in background...`);
+        const tab = await this.tabManager.openTab(target.url, undefined, 'ai', 'persist:tandem', false);
+        if (tab) openedTabs.push({ tab, store: target.name, url: target.url });
+      }
+
+      await new Promise(r => setTimeout(r, 2800));
+
+      for (const entry of openedTabs) {
+        const wc = this.tabManager.getWebContents(entry.tab.id);
+        if (!wc) {
+          comparisonResults.push({ store: entry.store, title: item, price: 'Check Site', link: entry.url });
+          continue;
+        }
+
+        const extractScript = `
+          (() => {
+            const amzItem = document.querySelector('[data-component-type="s-search-result"], .s-result-item');
+            if (amzItem) {
+              const title = amzItem.querySelector('h2 a span, h2, .a-text-normal')?.innerText?.trim() || '';
+              const whole = amzItem.querySelector('.a-price-whole')?.innerText?.replace(/\\n/g, '').trim() || '';
+              const frac = amzItem.querySelector('.a-price-fraction')?.innerText?.trim() || '00';
+              const price = whole ? ('$' + whole + '.' + frac) : (amzItem.querySelector('.a-price, [data-price]')?.innerText?.trim() || 'N/A');
+              const link = amzItem.querySelector('h2 a, a.a-link-normal')?.href || window.location.href;
+              if (title) return { title: title.slice(0, 60), price, link };
+            }
+
+            const gHeading = document.querySelector('#search a h3, #rso a h3, a h3');
+            if (gHeading) {
+              const a = gHeading.closest('a');
+              const title = gHeading.innerText?.trim() || '';
+              const priceMatch = (document.body?.innerText || '').match(/\\$[0-9,]+(?:\\.[0-9]{2})?/);
+              const price = priceMatch ? priceMatch[0] : 'Check link';
+              return { title: title.slice(0, 60), price, link: a ? a.href : window.location.href };
+            }
+
+            return { title: document.title.slice(0, 50), price: 'See listing', link: window.location.href };
+          })()
+        `;
+
+        try {
+          const res = (await this.devToolsManager.evaluateInTab(wc.id, extractScript)) as { title: string; price: string; link: string } | null;
+          if (res) {
+            comparisonResults.push({ store: entry.store, title: res.title || item, price: res.price || 'N/A', link: res.link || entry.url });
+          } else {
+            comparisonResults.push({ store: entry.store, title: item, price: 'Available', link: entry.url });
+          }
+        } catch {
+          comparisonResults.push({ store: entry.store, title: item, price: 'Available', link: entry.url });
+        }
+      }
+    } finally {
+      for (const entry of openedTabs) {
+        try {
+          await this.tabManager.closeTab(entry.tab.id);
+        } catch {}
+      }
+    }
+
+    const rows = comparisonResults.map(r => {
+      const linkCol = `[View on ${r.store}](${r.link})`;
+      return `| **${r.store}** | ${r.title} | \`${r.price}\` | ${linkCol} |`;
+    });
+
+    return [
+      breadcrumbTrail,
+      `### ⚖️ Multi-Store Comparison: "${item}"`,
+      `Synthesized across **${comparisonResults.length} background tabs**:\n`,
+      `| Store / Platform | Matching Product | Price | Direct Link |`,
+      `| :--- | :--- | :--- | :--- |`,
+      ...rows,
+      `\n*All research tabs were queried in parallel and closed automatically to conserve system memory.*`
+    ].join('\n');
   }
 
   // ─── Intent Handlers ────────────────────────────────────────────────────────

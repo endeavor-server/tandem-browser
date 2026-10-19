@@ -437,4 +437,95 @@ describe('AntigravityAgent Phase 1 Capabilities', () => {
       expect.objectContaining({ actorLabel: 'Antigravity' })
     );
   });
+
+  it('handles /persona command to view and manage persona vault', async () => {
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 14,
+      from: 'user',
+      text: '/persona',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Smart Persona Vault'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles /autofill command to populate detected form fields', async () => {
+    mockDevToolsManager.evaluateInTab
+      .mockResolvedValueOnce({ dismissed: false }) // autoDismissOverlays
+      .mockResolvedValueOnce({
+        filled: [
+          { field: 'firstName', value: 'Alex', label: 'firstName' },
+          { field: 'lastName', value: 'Mercer', label: 'lastName' }
+        ],
+        totalInputs: 2
+      });
+
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 15,
+      from: 'user',
+      text: '/autofill',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('1-Click Form Autofill Complete'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles /compare command for parallel price synthesis', async () => {
+    mockDevToolsManager.evaluateInTab
+      .mockResolvedValue({ title: 'Apple MacBook Pro M3', price: '$1,599.00', link: 'https://amazon.com/mbp' });
+
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 16,
+      from: 'user',
+      text: '/compare macbook pro m3',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Multi-Store Comparison'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('formats visual action breadcrumb trails correctly', () => {
+    const trail = AntigravityAgent.formatBreadcrumbs(['🌐 Navigated', '🧹 Swept Overlays', '⚡ Autofilled']);
+    expect(trail).toContain('breadcrumb-trail');
+    expect(trail).toContain('breadcrumb-step');
+    expect(trail).toContain('Action Timeline:');
+    expect(trail).toContain('🌐 Navigated');
+    expect(trail).toContain('⚡ Autofilled');
+  });
 });

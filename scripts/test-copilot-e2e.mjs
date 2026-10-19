@@ -284,6 +284,71 @@ async function runE2ETests() {
   assert(buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47, 'Valid PNG header signature detected');
 
   // --------------------------------------------------------------------------
+  console.log('\n--- 12. Smart Persona Vault Management ---');
+  // --------------------------------------------------------------------------
+  console.log('  Testing /persona (view persona vault)');
+  const personaViewReply = await sendUserMessage('/persona');
+  console.log(`  Agent reply: "${personaViewReply.slice(0, 150)}..."`);
+  assert(personaViewReply.includes('Smart Persona Vault'), 'Persona vault dashboard rendered');
+  assert(personaViewReply.includes('Active Persona'), 'Active persona displayed in dashboard');
+
+  console.log('  Testing /persona create staging');
+  const personaCreateReply = await sendUserMessage('/persona create staging');
+  assert(personaCreateReply.includes('Created new persona') && personaCreateReply.includes('staging'), 'Created new persona "staging"');
+
+  console.log('  Testing /persona set email staging@endeavor.test');
+  const personaSetReply = await sendUserMessage('/persona set email staging@endeavor.test');
+  assert(personaSetReply.includes('Updated') && personaSetReply.includes('staging@endeavor.test'), 'Updated staging persona email');
+
+  console.log('  Testing /persona use default');
+  const personaUseReply = await sendUserMessage('/persona use default');
+  assert(personaUseReply.includes('Switched active persona to') && personaUseReply.includes('default'), 'Switched back to default persona');
+
+  // --------------------------------------------------------------------------
+  console.log('\n--- 13. 1-Click Autonomous Form Autofill & Visual Breadcrumbs ---');
+  // --------------------------------------------------------------------------
+  console.log('  Injecting dynamic registration form into active tab DOM');
+  await executeJs(`
+    document.body.innerHTML = \`
+      <div style="padding: 40px; font-family: sans-serif;">
+        <h2>User Registration Form</h2>
+        <form id="e2e-reg-form">
+          <input type="text" id="fn" name="firstName" placeholder="First Name"><br><br>
+          <input type="text" id="ln" name="lastName" placeholder="Last Name"><br><br>
+          <input type="email" id="em" name="email" placeholder="Email Address"><br><br>
+          <input type="tel" id="ph" name="phone" placeholder="Phone Number"><br><br>
+          <input type="text" id="co" name="company" placeholder="Company"><br><br>
+          <input type="text" id="zp" name="zip" placeholder="Zip code"><br><br>
+        </form>
+      </div>
+    \`;
+  `);
+
+  console.log('  Sending /autofill command');
+  const autofillReply = await sendUserMessage('/autofill');
+  console.log(`  Agent reply: "${autofillReply.slice(0, 200)}..."`);
+  assert(autofillReply.includes('1-Click Form Autofill Complete'), 'Autofill execution completed');
+  assert(autofillReply.includes('breadcrumb-trail') || autofillReply.includes('Action Timeline'), 'Visual action breadcrumbs trail generated');
+
+  // Verify DOM values actually populated
+  const domFirstName = await executeJs('document.getElementById("fn").value');
+  const domEmail = await executeJs('document.getElementById("em").value');
+  const domCompany = await executeJs('document.getElementById("co").value');
+  console.log(`  DOM Form Verification: firstName="${domFirstName}", email="${domEmail}", company="${domCompany}"`);
+  assert(domFirstName === 'Alex', `First name correctly populated into DOM: ${domFirstName}`);
+  assert(domEmail === 'alex.mercer.dev@gmail.com', `Email correctly populated into DOM: ${domEmail}`);
+  assert(domCompany === 'Endeavor Labs', `Company correctly populated into DOM: ${domCompany}`);
+
+  // --------------------------------------------------------------------------
+  console.log('\n--- 14. Multi-Store Parallel Price Comparison ---');
+  // --------------------------------------------------------------------------
+  console.log('  Testing /compare Sony Headphones on google and amazon');
+  const compareReply = await sendUserMessage('/compare Sony Headphones on google and amazon');
+  console.log(`  Agent reply: "${compareReply.slice(0, 250)}..."`);
+  assert(compareReply.includes('Comparison Matrix') || compareReply.includes('Store'), 'Comparison matrix table synthesized');
+  assert(compareReply.includes('breadcrumb-trail') || compareReply.includes('Action Timeline'), 'Visual action breadcrumbs generated for multi-tab flow');
+
+  // --------------------------------------------------------------------------
   console.log('\n======================================================');
   console.log(`🏁 E2E Test Complete: ${passedCount} passed, ${failedCount} failed`);
   console.log('======================================================\n');

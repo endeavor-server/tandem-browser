@@ -539,6 +539,65 @@ export function initChat() {
     });
   });
 
+  // ── Voice Dictation (🎙️ Speak-to-Browse) ──
+  const micBtn = document.getElementById('chat-mic-btn');
+  let recognition = null;
+  let isListening = false;
+
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (micBtn && SpeechRec) {
+    recognition = new SpeechRec();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onstart = () => {
+      isListening = true;
+      micBtn.classList.add('listening');
+      inputEl.placeholder = '🎙️ Listening... speak your command';
+    };
+
+    recognition.onresult = (e) => {
+      let transcript = '';
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
+        transcript += e.results[i][0].transcript;
+      }
+      inputEl.value = transcript;
+      inputEl.style.height = '';
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 80) + 'px';
+    };
+
+    recognition.onerror = (e) => {
+      console.warn('[VoiceDictation] Error:', e.error);
+      isListening = false;
+      micBtn.classList.remove('listening');
+      inputEl.placeholder = 'Message to Wingman or type /...';
+    };
+
+    recognition.onend = () => {
+      isListening = false;
+      micBtn.classList.remove('listening');
+      inputEl.placeholder = 'Message to Wingman or type /...';
+      inputEl.focus();
+    };
+
+    micBtn.addEventListener('click', () => {
+      if (!isListening) {
+        try {
+          recognition.start();
+        } catch (err) {
+          console.warn('[VoiceDictation] Start error:', err);
+        }
+      } else {
+        recognition.stop();
+      }
+    });
+  } else if (micBtn) {
+    micBtn.addEventListener('click', () => {
+      alert('Speech recognition is not supported in this view.');
+    });
+  }
+
   // ── Initialize ──
 
   // Load saved backend from config.
