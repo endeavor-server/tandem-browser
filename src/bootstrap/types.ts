@@ -23,6 +23,7 @@ import type { ExtensionManager } from '../extensions/manager';
 import type { ExtensionToolbar } from '../extensions/toolbar';
 import type { ClaroNoteManager } from '../claronote/manager';
 import type { EventStreamManager } from '../events/stream';
+import type { AntigravityAgent } from '../agents/antigravity-agent';
 import type { HandoffManager } from '../handoffs/manager';
 import type { TaskManager } from '../agents/task-manager';
 import type { TaskHandoffCoordinator } from '../agents/task-handoff-coordinator';
@@ -81,6 +82,7 @@ export interface RuntimeManagers {
   handoffManager: HandoffManager;
   taskManager: TaskManager;
   taskHandoffCoordinator: TaskHandoffCoordinator;
+  antigravityAgent?: AntigravityAgent;
   tabLockManager: TabLockManager;
   contextMenuManager: ContextMenuManager;
   devToolsManager: DevToolsManager;

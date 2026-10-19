@@ -62,6 +62,7 @@ export class PanelManager {
   private chatHistoryPath: string;
   private wingmanTyping = false;
   private chatImagesDir: string;
+  private messageListeners: Array<(msg: ChatMessage) => void> = [];
 
   // === 2. Constructor ===
 
@@ -153,7 +154,27 @@ export class PanelManager {
       this.fireWebhook(msg).catch(e => log.warn('fireWebhook failed:', e instanceof Error ? e.message : e));
     }
 
+    this.notifyMessageListeners(msg);
+
     return msg;
+  }
+
+  /** Subscribe to incoming chat messages */
+  onChatMessage(listener: (msg: ChatMessage) => void): () => void {
+    this.messageListeners.push(listener);
+    return () => {
+      this.messageListeners = this.messageListeners.filter(l => l !== listener);
+    };
+  }
+
+  private notifyMessageListeners(msg: ChatMessage): void {
+    for (const listener of this.messageListeners) {
+      try {
+        listener(msg);
+      } catch (err) {
+        log.warn('Message listener error:', err instanceof Error ? err.message : err);
+      }
+    }
   }
 
   /** Get chat history, optionally filtered by targetAgent */

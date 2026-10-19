@@ -5,6 +5,7 @@ import { ActivityTracker } from '../activity/tracker';
 import { WingmanStream } from '../activity/wingman-stream';
 import { TaskManager } from '../agents/task-manager';
 import { TaskHandoffCoordinator } from '../agents/task-handoff-coordinator';
+import { AntigravityAgent } from '../agents/antigravity-agent';
 import { AgentTrustStore } from '../security/agent-trust';
 import { TabLockManager } from '../agents/tab-lock-manager';
 import { LoginManager } from '../auth/login-manager';
@@ -258,6 +259,12 @@ export async function initializeRuntimeManagers(opts: InitializeRuntimeOptions):
   runtime.taskHandoffCoordinator = new TaskHandoffCoordinator(runtime.taskManager, runtime.handoffManager);
   runtime.tabLockManager = new TabLockManager();
   runtime.devToolsManager = new DevToolsManager(runtime.tabManager);
+  runtime.antigravityAgent = new AntigravityAgent({
+    tabManager: runtime.tabManager,
+    panelManager: runtime.panelManager,
+    devToolsManager: runtime.devToolsManager,
+    configManager: runtime.configManager,
+  });
   runtime.snapshotManager = new SnapshotManager(runtime.devToolsManager);
   runtime.networkMocker = new NetworkMocker(runtime.devToolsManager);
   runtime.sessionManager = new SessionManager();
@@ -540,6 +547,7 @@ export function destroyRuntime(opts: DestroyRuntimeOptions): void {
   }
 
   runtime.videoRecorderManager.forceStop();
+  runtime.antigravityAgent?.stopListening();
   runtime.chromeImporter.destroy();
   runtime.taskManager.destroy();
   runtime.tabLockManager.destroy();
