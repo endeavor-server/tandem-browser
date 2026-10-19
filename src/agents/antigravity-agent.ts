@@ -134,6 +134,7 @@ export class AntigravityAgent {
   private injectionGuard: PromptInjectionGuard;
   private safetyGovernor: LinkedInSafetyGovernor;
   private lastExtractedLeads: ExtractedLead[] = [];
+  private lastExtractedStructuredData: Record<string, unknown>[] = [];
   private unsubscribe?: () => void;
   private isProcessing = false;
 
@@ -313,8 +314,19 @@ export class AntigravityAgent {
       return await this.handleLeadExtraction();
     }
 
-    // ─── 5. Export leads to CSV ───────────────────────────────────────────────
-    if (lower.includes('export leads') || lower.includes('save leads') || lower.includes('download leads')) {
+    // ─── 4b. Dismiss overlays & cookie banners ────────────────────────────────
+    if (lower.includes('dismiss cookie') || lower.includes('close popup') || lower.includes('dismiss banner') || lower === 'dismiss') {
+      return await this.handleDismissOverlays();
+    }
+
+    // ─── 4c. Structured Web Data Extraction ───────────────────────────────────
+    if (lower.startsWith('extract data') || lower.startsWith('extract table') || lower.startsWith('extract product') || lower.startsWith('scrape data')) {
+      const q = text.replace(/^(?:extract|scrape)\s+(?:data|table|products?)?/i, '').trim();
+      return await this.handleExtractStructuredData(q);
+    }
+
+    // ─── 5. Export leads or data to CSV ───────────────────────────────────────
+    if (lower.includes('export') || lower.includes('download csv') || lower.includes('save leads')) {
       return this.exportLeadsToCsv();
     }
 
@@ -384,9 +396,11 @@ export class AntigravityAgent {
           ``,
           `| Command | Description |`,
           `| :--- | :--- |`,
+          `| \`/extract [query]\` | Extract structured data (tables, cards, products) to CSV |`,
+          `| \`/dismiss\` | Auto-sweep and close cookie banners and popup modals |`,
           `| \`/leads [query]\` | Find leads from visible cards (0 profile views used, zero ban risk) |`,
           `| \`/enrich [count]\` | Deep-enrich profiles sequentially with human delays & anti-ban governor |`,
-          `| \`/export\` | Export latest extracted leads to \`~/Downloads\` |`,
+          `| \`/export\` | Export latest extracted leads or data to \`~/Downloads\` |`,
           `| \`/summarize\` | Extract and summarize active page content |`,
           `| \`/snapshot\` | Inspect interactive accessibility elements with \`@e\` refs |`,
           `| \`/click <target | @e>\` | Click element by text, selector, or \`@e\` ref |`,
@@ -398,6 +412,14 @@ export class AntigravityAgent {
           ``,
           `*You can also type natural English prompts like "open youtube for me", "summarize this page", or "find leads on this site"!*`
         ].join('\n');
+
+      case '/dismiss':
+      case '/clear-popups':
+        return await this.handleDismissOverlays();
+
+      case '/extract':
+      case '/scrape':
+        return await this.handleExtractStructuredData(args);
 
       case '/leads':
       case '/lead':
@@ -504,6 +526,10 @@ export class AntigravityAgent {
         result = await this.handleLeadExtraction();
       } else if (cl.includes('enrich')) {
         result = await this.handleEnrichLeads();
+      } else if (cl.includes('dismiss') || cl.includes('close popup') || cl.includes('accept cookie')) {
+        result = await this.handleDismissOverlays();
+      } else if (cl.includes('extract data') || cl.includes('extract product') || cl.includes('extract table') || cl.startsWith('extract')) {
+        result = await this.handleExtractStructuredData(clause.replace(/^extract\s+(?:data|table|products?)?/i, '').trim());
       } else if (cl.includes('export')) {
         result = this.exportLeadsToCsv();
       } else if (/^(?:please\s+)?(?:click|press|tap)/i.test(cl)) {
@@ -874,10 +900,13 @@ export class AntigravityAgent {
     ].join('\n');
   }
 
-  /** Export currently extracted leads to a CSV file in ~/Downloads */
+  /** Export currently extracted leads or structured data to a CSV file in ~/Downloads */
   private exportLeadsToCsv(customName?: string): string {
-    if (this.lastExtractedLeads.length === 0) {
-      return 'No leads currently stored in memory. Run `/leads` or navigate to LinkedIn first to extract contacts.';
+    const hasLeads = this.lastExtractedLeads.length > 0;
+    const hasStructured = this.lastExtractedStructuredData.length > 0;
+
+    if (!hasLeads && !hasStructured) {
+      return 'No leads or structured data currently stored in memory. Run `/leads` or `/extract` first.';
     }
 
     try {
@@ -887,28 +916,179 @@ export class AntigravityAgent {
       }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const filename = customName ? `${customName.replace(/[^a-zA-Z0-9_-]/g, '_')}.csv` : `tandem_leads_${timestamp}.csv`;
+      const filename = customName ? `${customName.replace(/[^a-zA-Z0-9_-]/g, '_')}.csv` : (hasLeads ? `tandem_leads_${timestamp}.csv` : `tandem_data_${timestamp}.csv`);
       const filePath = path.join(downloadsDir, filename);
 
-      const header = 'Name,Title / Headline,Company / Location,Profile URL,About / Summary,Contact\n';
-      const rows = this.lastExtractedLeads.map(l => {
-        const escapeCsv = (str?: string) => `"${(str || '').replace(/"/g, '""')}"`;
-        return [
-          escapeCsv(l.name),
-          escapeCsv(l.headline),
-          escapeCsv(l.location || l.company),
-          escapeCsv(l.profileUrl),
-          escapeCsv(l.about),
-          escapeCsv(l.contact)
-        ].join(',');
-      }).join('\n');
-
-      fs.writeFileSync(filePath, header + rows, 'utf-8');
+      if (hasLeads) {
+        const header = 'Name,Title / Headline,Company / Location,Profile URL,About / Summary,Contact\n';
+        const rows = this.lastExtractedLeads.map(l => {
+          const escapeCsv = (str?: string) => `"${(str || '').replace(/"/g, '""')}"`;
+          return [
+            escapeCsv(l.name),
+            escapeCsv(l.headline),
+            escapeCsv(l.location || l.company),
+            escapeCsv(l.profileUrl),
+            escapeCsv(l.about),
+            escapeCsv(l.contact)
+          ].join(',');
+        }).join('\n');
+        fs.writeFileSync(filePath, header + rows, 'utf-8');
+      } else {
+        const keys = Array.from(new Set(this.lastExtractedStructuredData.flatMap(Object.keys)));
+        const header = keys.map(k => `"${String(k).replace(/"/g, '""')}"`).join(',') + '\n';
+        const rows = this.lastExtractedStructuredData.map(item => {
+          return keys.map(k => `"${String(item[k] || '').replace(/"/g, '""')}"`).join(',');
+        }).join('\n');
+        fs.writeFileSync(filePath, header + rows, 'utf-8');
+      }
 
       return `💾 **CSV Exported Successfully:** [${filename}](file://${filePath})\n*(Saved to ${filePath})*`;
     } catch (e) {
-      log.error('Failed to export leads CSV:', e);
+      log.error('Failed to export CSV:', e);
       return `⚠️ Failed to write CSV file: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /** Sweep away blocking cookie consent banners, GDPR dialogs, and popups */
+  private async autoDismissOverlays(wc?: Electron.WebContents | null): Promise<{ dismissed: boolean; target?: string }> {
+    let targetWc: Electron.WebContents | null | undefined = wc;
+    if (!targetWc) {
+      const activeTab = this.tabManager.getActiveTab();
+      if (!activeTab) return { dismissed: false };
+      targetWc = this.tabManager.getWebContents(activeTab.id);
+      if (!targetWc) return { dismissed: false };
+    }
+
+    const script = `
+      (() => {
+        const dismissSelectors = [
+          '#onetrust-accept-btn-handler',
+          '.onetrust-close-btn-handler',
+          '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+          '#didomi-notice-agree-button',
+          '.cc-accept',
+          '.cc-dismiss',
+          'button[id*="cookie-accept"]',
+          'button[class*="cookie-accept"]',
+          'button[data-testid*="cookie-accept"]',
+          'button[data-testid*="accept-all"]',
+          'button[aria-label="Accept all"]',
+          'button[aria-label="Accept all cookies"]',
+          'button[aria-label="Close"]',
+          '.modal-close',
+          '.popup-close',
+          '.close-modal'
+        ];
+
+        for (const sel of dismissSelectors) {
+          try {
+            const el = document.querySelector(sel);
+            if (el && el.offsetParent !== null) {
+              el.click();
+              return { dismissed: true, target: sel };
+            }
+          } catch (e) {}
+        }
+
+        const buttons = Array.from(document.querySelectorAll('button, a[role="button"]'));
+        const consentTexts = ['accept all cookies', 'accept all', 'allow all', 'i agree', 'got it', 'dismiss'];
+        for (const btn of buttons) {
+          const txt = (btn.innerText || '').trim().toLowerCase();
+          if (consentTexts.includes(txt) && btn.offsetParent !== null) {
+            btn.click();
+            return { dismissed: true, target: txt };
+          }
+        }
+        return { dismissed: false };
+      })()
+    `;
+
+    try {
+      const res = (await this.devToolsManager.evaluateInTab(targetWc.id, script)) as { dismissed: boolean; target?: string } | null;
+      return res || { dismissed: false };
+    } catch (e) {
+      return { dismissed: false };
+    }
+  }
+
+  private async handleDismissOverlays(): Promise<string> {
+    const res = await this.autoDismissOverlays();
+    if (res.dismissed) {
+      return `🧹 **Auto-Dismissed Overlay:** Closed popup/cookie consent banner matching \`${res.target}\`.`;
+    }
+    return `✨ **Clean Viewport:** No blocking cookie banners or modal overlays detected.`;
+  }
+
+  /** Extract structured data cards, tables, or products from the active page */
+  private async handleExtractStructuredData(queryArg?: string): Promise<string> {
+    const activeTab = this.tabManager.getActiveTab();
+    if (!activeTab) return 'No active tab found for structured data extraction.';
+
+    const wc = this.tabManager.getWebContents(activeTab.id);
+    if (!wc) return 'Cannot access active tab web contents.';
+
+    const script = `
+      (() => {
+        const items = [];
+        // 1. Detect Tables
+        const table = document.querySelector('table');
+        if (table) {
+          const headers = Array.from(table.querySelectorAll('th')).map(th => th.innerText.trim());
+          const rows = Array.from(table.querySelectorAll('tbody tr, tr:not(:has(th))'));
+          for (const row of rows.slice(0, 30)) {
+            const cells = Array.from(row.querySelectorAll('td')).map(td => td.innerText.trim());
+            if (cells.length > 0) {
+              const obj = {};
+              cells.forEach((c, idx) => { obj[headers[idx] || ('Col_' + (idx + 1))] = c; });
+              items.push(obj);
+            }
+          }
+          if (items.length > 0) return { type: 'table', items };
+        }
+
+        // 2. Detect Product Cards
+        const cards = Array.from(document.querySelectorAll('[data-component-type="s-search-result"], .s-result-item, .product-card, .card, article'));
+        for (const c of cards.slice(0, 30)) {
+          const title = c.querySelector('h2, h3, h4, .title')?.innerText?.trim() || '';
+          const price = c.querySelector('.price, .a-price, [data-price]')?.innerText?.replace(/\\s+/g, ' ').trim() || '';
+          const link = c.querySelector('a')?.href || '';
+          if (title && (price || link)) {
+            items.push({ title, price: price || 'N/A', link });
+          }
+        }
+        if (items.length > 0) return { type: 'products', items };
+
+        return { type: 'none', items: [] };
+      })()
+    `;
+
+    try {
+      const res = (await this.devToolsManager.evaluateInTab(wc.id, script)) as { type: string; items: Record<string, unknown>[] } | null;
+      if (!res || !res.items || res.items.length === 0) {
+        return `### 📊 Structured Data\nNo tables or product cards detected on **${activeTab.title}**.`;
+      }
+
+      this.lastExtractedStructuredData = res.items;
+
+      const sample = res.items[0];
+      const keys = Object.keys(sample).slice(0, 4);
+      const header = `| ${keys.join(' | ')} |`;
+      const divider = `| ${keys.map(() => ':---').join(' | ')} |`;
+      const rows = res.items.slice(0, 15).map(item => {
+        return `| ${keys.map(k => String(item[k] || '-').slice(0, 35)).join(' | ')} |`;
+      });
+
+      return [
+        `### 📊 Extracted Structured Data (${res.items.length} items, type: \`${res.type}\`)`,
+        `Page: **${activeTab.title}**\n`,
+        header,
+        divider,
+        ...rows,
+        `\n*Type \`/export\` to save this table to CSV!*`
+      ].join('\n');
+    } catch (e) {
+      log.error('Structured data extraction failed:', e);
+      return `Failed to extract structured data: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -954,6 +1134,11 @@ export class AntigravityAgent {
     if (!activeTab) return 'No active tab to click on.';
 
     const target = selectorOrRefOrText.trim();
+    const wc = this.tabManager.getWebContents(activeTab.id);
+    if (!wc) return 'Cannot access tab web contents.';
+
+    // Autonomous pre-action sweep: clear any blocking cookie consent dialogs
+    await this.autoDismissOverlays(wc);
 
     // Check if target is an @e ref (e.g. @e1, @e12)
     if (target.startsWith('@e') && this.snapshotManager) {
@@ -965,29 +1150,47 @@ export class AntigravityAgent {
       }
     }
 
-    const wc = this.tabManager.getWebContents(activeTab.id);
-    if (!wc) return 'Cannot access tab web contents.';
-
     const result = await humanizedClick(wc, target);
     if (!result.ok) {
       const jsClick = `
         (() => {
           const t = ${JSON.stringify(target.toLowerCase())};
-          const elements = Array.from(document.querySelectorAll('button, a, input[type="submit"], [role="button"], span, div'));
+          const elements = Array.from(document.querySelectorAll('button, a, input[type="submit"], input[type="button"], [role="button"], span, div'));
+          // 1. Exact text or ARIA match
           for (const el of elements) {
-            if (el.innerText && el.innerText.trim().toLowerCase() === t) {
+            const txt = (el.innerText || '').trim().toLowerCase();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            if (txt === t || aria === t) {
               el.scrollIntoView({ behavior: 'smooth', block: 'center' });
               el.click();
-              return true;
+              return { ok: true, matchedBy: 'exact' };
             }
           }
-          return false;
+          // 2. Fuzzy substring match
+          for (const el of elements) {
+            const txt = (el.innerText || '').trim().toLowerCase();
+            const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+            if ((txt && txt.includes(t)) || (aria && aria.includes(t))) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.click();
+              return { ok: true, matchedBy: 'fuzzy' };
+            }
+          }
+          return { ok: false };
         })()
       `;
-      const clicked = await this.devToolsManager.evaluateInTab(wc.id, jsClick);
-      if (clicked) {
-        return `Clicked on element matching text **"${target}"**.`;
+      let clicked = (await this.devToolsManager.evaluateInTab(wc.id, jsClick)) as { ok: boolean; matchedBy?: string } | null;
+      if (clicked && clicked.ok) {
+        return `Clicked on element matching text **"${target}"** (${clicked.matchedBy || 'self-healing'}).`;
       }
+
+      // Self-healing retry: sweep overlays and retry
+      await this.autoDismissOverlays(wc);
+      clicked = (await this.devToolsManager.evaluateInTab(wc.id, jsClick)) as { ok: boolean; matchedBy?: string } | null;
+      if (clicked && clicked.ok) {
+        return `Clicked on element matching text **"${target}"** (via self-healing retry).`;
+      }
+
       return `Could not find clickable element matching **"${target}"**. You can run \`/snapshot\` to inspect available \`@e\` refs.`;
     }
 

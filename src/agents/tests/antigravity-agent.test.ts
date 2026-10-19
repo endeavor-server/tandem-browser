@@ -287,4 +287,60 @@ describe('AntigravityAgent Phase 1 Capabilities', () => {
       expect.objectContaining({ actorLabel: 'Antigravity' })
     );
   });
+
+  it('handles /dismiss slash command to auto-sweep overlays', async () => {
+    mockDevToolsManager.evaluateInTab.mockResolvedValueOnce({ dismissed: true, target: '#onetrust-accept-btn-handler' });
+
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 9,
+      from: 'user',
+      text: '/dismiss',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Auto-Dismissed Overlay'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
+
+  it('handles /extract command to extract structured table data', async () => {
+    mockDevToolsManager.evaluateInTab.mockResolvedValueOnce({
+      type: 'table',
+      items: [
+        { Product: 'MacBook Pro', Price: '$2499', Rating: '5 stars' },
+        { Product: 'iPad Pro', Price: '$999', Rating: '4.8 stars' }
+      ]
+    });
+
+    new AntigravityAgent({
+      tabManager: mockTabManager,
+      panelManager: mockPanelManager,
+      devToolsManager: mockDevToolsManager,
+      snapshotManager: mockSnapshotManager
+    });
+
+    await chatListener!({
+      id: 10,
+      from: 'user',
+      text: '/extract',
+      targetAgent: 'antigravity'
+    });
+
+    expect(mockPanelManager.addChatMessage).toHaveBeenCalledWith(
+      'antigravity',
+      expect.stringContaining('Extracted Structured Data (2 items'),
+      undefined,
+      expect.objectContaining({ actorLabel: 'Antigravity' })
+    );
+  });
 });
