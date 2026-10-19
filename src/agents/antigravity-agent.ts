@@ -425,7 +425,9 @@ export class AntigravityAgent {
           `| \`/export\` | Export latest extracted leads or data to \`~/Downloads\` |`,
           `| \`/summarize\` | Extract and summarize active page content |`,
           `| \`/snapshot\` | Inspect interactive accessibility elements with \`@e\` refs |`,
-          `| \`/click <target | @e>\` | Click element by text, selector, or \`@e\` ref |`,
+          `| \`/mark\` | Tag interactive elements with Set-of-Marks visual badges |`,
+          `| \`/unmark\` | Clear visual badges from active page |`,
+          `| \`/click <target | @e | number>\` | Click element by text, selector, @e ref, or mark number |`,
           `| \`/type <target | @e> <text>\` | Type text into input field |`,
           `| \`/scroll [up | down | top | bottom]\` | Scroll the active page |`,
           `| \`/tabs\` | List all open tabs with status and IDs |`,
@@ -434,6 +436,14 @@ export class AntigravityAgent {
           ``,
           `*You can also type natural English prompts like "open youtube for me", "summarize this page", or "find leads on this site"!*`
         ].join('\n');
+
+      case '/mark':
+      case '/som':
+        return await this.handleMarkInteractiveElements();
+
+      case '/unmark':
+      case '/clear-marks':
+        return await this.handleClearMarks();
 
       case '/dismiss':
       case '/clear-popups':
@@ -1271,6 +1281,81 @@ export class AntigravityAgent {
     }
   }
 
+  /** Set-of-Marks (SoM): Mark interactive elements with visual yellow badges */
+  private async handleMarkInteractiveElements(): Promise<string> {
+    const activeTab = this.tabManager.getActiveTab();
+    if (!activeTab) return 'No active tab to mark elements on.';
+    const wc = this.tabManager.getWebContents(activeTab.id);
+    if (!wc) return 'Cannot access active tab web contents.';
+
+    const markScript = `
+      (() => {
+        const old = document.getElementById('antigravity-som-container');
+        if (old) old.remove();
+
+        const container = document.createElement('div');
+        container.id = 'antigravity-som-container';
+        container.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2147483646;';
+
+        const selector = 'button, a, input, select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"]';
+        const elements = Array.from(document.querySelectorAll(selector));
+        let count = 0;
+        window.__antigravityMarkedMap = new Map();
+
+        for (const el of elements) {
+          if (count >= 60) break;
+          const rect = el.getBoundingClientRect();
+          if (rect.width <= 4 || rect.height <= 4) continue;
+          if (rect.bottom < -100 || rect.top > window.innerHeight + 100) continue;
+          const style = window.getComputedStyle(el);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+
+          count++;
+          window.__antigravityMarkedMap.set(count, el);
+
+          const badge = document.createElement('div');
+          badge.className = 'antigravity-marker agy-som-badge';
+          badge.dataset.markId = String(count);
+          badge.innerText = String(count);
+          badge.style.cssText = 'position:absolute;' +
+            'left:' + (rect.left + window.scrollX) + 'px;' +
+            'top:' + (rect.top + window.scrollY) + 'px;' +
+            'background:#facc15;color:#000000;font-size:11px;font-weight:bold;font-family:monospace;' +
+            'padding:1px 5px;border-radius:3px;border:1px solid #78350f;box-shadow:0 1px 3px rgba(0,0,0,0.3);' +
+            'pointer-events:none;line-height:1.2;z-index:2147483647;';
+          container.appendChild(badge);
+        }
+
+        document.body.appendChild(container);
+        return count;
+      })()
+    `;
+
+    try {
+      const count = (await this.devToolsManager.evaluateInTab(wc.id, markScript)) as number;
+      return `🎯 **Numbered ${count} interactive elements** on [${activeTab.title}](${activeTab.url}) with visual badges. Type \`/click <number>\` (e.g. \`/click 1\`) to click any marked item!`;
+    } catch (e) {
+      log.error('Mark elements failed:', e);
+      return `Failed to mark elements: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  private async handleClearMarks(): Promise<string> {
+    const activeTab = this.tabManager.getActiveTab();
+    if (!activeTab) return 'No active tab.';
+    const wc = this.tabManager.getWebContents(activeTab.id);
+    if (!wc) return 'Cannot access tab web contents.';
+
+    await this.devToolsManager.evaluateInTab(wc.id, `
+      (() => {
+        const c = document.getElementById('antigravity-som-container');
+        if (c) c.remove();
+        if (window.__antigravityMarkedMap) window.__antigravityMarkedMap.clear();
+      })()
+    `);
+    return 'Cleared all Set-of-Marks badges from the active tab.';
+  }
+
   /** Snapshot accessibility tree and return interactive elements with @e refs */
   private async handleSnapshot(): Promise<string> {
     const activeTab = this.tabManager.getActiveTab();
@@ -1318,6 +1403,38 @@ export class AntigravityAgent {
 
     // Autonomous pre-action sweep: clear any blocking cookie consent dialogs
     await this.autoDismissOverlays(wc);
+
+    // Check if target is a numeric mark ID (e.g. 1, 2)
+    if (/^\d+$/.test(target)) {
+      const clickMarkScript = `
+        (() => {
+          const num = ${target};
+          const el = window.__antigravityMarkedMap ? window.__antigravityMarkedMap.get(num) : null;
+          const badge = document.querySelector('.antigravity-marker[data-mark-id="' + num + '"]');
+          const targetEl = el || (badge ? (badge.__targetElement || badge) : null);
+
+          // Clear markers container
+          const container = document.getElementById('antigravity-som-container');
+          if (container) container.remove();
+          if (window.__antigravityMarkedMap) window.__antigravityMarkedMap.clear();
+
+          if (targetEl) {
+            targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetEl.click();
+            return { ok: true, text: (targetEl.innerText || targetEl.getAttribute('aria-label') || 'Item #' + num).trim().slice(0, 40) };
+          }
+          return { ok: false };
+        })()
+      `;
+      try {
+        const markRes = (await this.devToolsManager.evaluateInTab(wc.id, clickMarkScript)) as { ok: boolean; text?: string } | null;
+        if (markRes && markRes.ok) {
+          return `Clicked on marked item #${target} (**"${markRes.text || target}"**) and cleared visual badges.`;
+        }
+      } catch (e) {
+        log.warn('Click mark failed:', e);
+      }
+    }
 
     // Check if target is an @e ref (e.g. @e1, @e12)
     if (target.startsWith('@e') && this.snapshotManager) {
